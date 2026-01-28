@@ -2,8 +2,11 @@
 package tui
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -61,6 +64,8 @@ const (
 	ModalDeleteResult
 	ModalAccountSelector
 	ModalAttachmentFilter
+	ModalExportAttachments
+	ModalExportResult
 	ModalQuitConfirm
 	ModalHelp
 )
@@ -219,6 +224,10 @@ type Model struct {
 	// Flash message (temporary notification)
 	flashMessage   string    // Message to display
 	flashExpiresAt time.Time // When the flash message expires
+
+	// Export attachments state
+	exportSelection map[int]bool // Selected attachment indices for export
+	exportCursor    int          // Cursor position in export modal
 
 	// Quit flag
 	quitting bool
@@ -2135,6 +2144,21 @@ func (m Model) handleMessageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loadRequestID++
 			return m, m.loadThreadMessages(m.messageDetail.ConversationID)
 		}
+
+	// Export attachments
+	case "e":
+		if m.messageDetail != nil && len(m.messageDetail.Attachments) > 0 {
+			m.modal = ModalExportAttachments
+			m.modalCursor = 0
+			// Initialize selection: all attachments selected by default
+			m.exportSelection = make(map[int]bool)
+			for i := range m.messageDetail.Attachments {
+				m.exportSelection[i] = true
+			}
+			m.exportCursor = 0
+		} else {
+			return m.showFlash("No attachments to export")
+		}
 	}
 
 	return m, nil
@@ -2552,6 +2576,44 @@ func (m Model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modal = ModalNone
 		}
 
+	case ModalExportAttachments:
+		if m.messageDetail == nil || len(m.messageDetail.Attachments) == 0 {
+			m.modal = ModalNone
+			return m, nil
+		}
+		maxIdx := len(m.messageDetail.Attachments) - 1
+		switch msg.String() {
+		case "up", "k":
+			if m.exportCursor > 0 {
+				m.exportCursor--
+			}
+		case "down", "j":
+			if m.exportCursor < maxIdx {
+				m.exportCursor++
+			}
+		case " ": // Space toggles selection
+			m.exportSelection[m.exportCursor] = !m.exportSelection[m.exportCursor]
+		case "a": // Select all
+			for i := range m.messageDetail.Attachments {
+				m.exportSelection[i] = true
+			}
+		case "n": // Select none
+			for i := range m.messageDetail.Attachments {
+				m.exportSelection[i] = false
+			}
+		case "enter":
+			// Export selected attachments
+			return m.exportAttachments()
+		case "esc":
+			m.modal = ModalNone
+			m.exportSelection = nil
+		}
+
+	case ModalExportResult:
+		// Any key closes the result modal
+		m.modal = ModalNone
+		m.modalResult = ""
+
 	case ModalHelp:
 		// Any key closes help
 		m.modal = ModalNone
@@ -2813,4 +2875,172 @@ func (m Model) renderView() string {
 	}
 
 	return ""
+}
+
+// exportAttachments exports selected attachments to a zip file.
+func (m Model) exportAttachments() (tea.Model, tea.Cmd) {
+	if m.messageDetail == nil || len(m.messageDetail.Attachments) == 0 {
+		m.modal = ModalNone
+		return m.showFlash("No attachments to export")
+	}
+
+	// Count selected attachments
+	var selectedAttachments []query.AttachmentInfo
+	for i, att := range m.messageDetail.Attachments {
+		if m.exportSelection[i] {
+			selectedAttachments = append(selectedAttachments, att)
+		}
+	}
+
+	if len(selectedAttachments) == 0 {
+		return m.showFlash("No attachments selected")
+	}
+
+	// Get attachments directory path
+	attachmentsDir := filepath.Join(m.dataDir, "attachments")
+
+	// Create output filename based on message subject
+	subject := m.messageDetail.Subject
+	if subject == "" {
+		subject = "attachments"
+	}
+	// Sanitize subject for filename
+	subject = sanitizeFilename(subject)
+	if len(subject) > 50 {
+		subject = subject[:50]
+	}
+
+	// Create zip file in current directory
+	zipFilename := fmt.Sprintf("%s_%d.zip", subject, m.messageDetail.ID)
+	zipFile, err := os.Create(zipFilename)
+	if err != nil {
+		m.modal = ModalExportResult
+		m.modalResult = fmt.Sprintf("Failed to create zip file: %v", err)
+		return m, nil
+	}
+	defer zipFile.Close()
+
+	zipWriter := zip.NewWriter(zipFile)
+	defer zipWriter.Close()
+
+	// Track exported files for result message
+	var exportedCount int
+	var totalSize int64
+	var errors []string
+
+	// Add each selected attachment to the zip
+	usedNames := make(map[string]int)
+	for _, att := range selectedAttachments {
+		// Construct storage path from content hash
+		if att.ContentHash == "" {
+			errors = append(errors, fmt.Sprintf("%s: missing content hash", att.Filename))
+			continue
+		}
+
+		storagePath := filepath.Join(attachmentsDir, att.ContentHash[:2], att.ContentHash)
+
+		// Open source file
+		srcFile, err := os.Open(storagePath)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", att.Filename, err))
+			continue
+		}
+
+		// Determine unique filename in zip
+		filename := att.Filename
+		if filename == "" {
+			filename = att.ContentHash
+		}
+		if count, exists := usedNames[filename]; exists {
+			// Add counter for duplicate names
+			ext := filepath.Ext(filename)
+			base := filename[:len(filename)-len(ext)]
+			filename = fmt.Sprintf("%s_%d%s", base, count+1, ext)
+			usedNames[att.Filename] = count + 1
+		} else {
+			usedNames[filename] = 1
+		}
+
+		// Create file in zip
+		w, err := zipWriter.Create(filename)
+		if err != nil {
+			srcFile.Close()
+			errors = append(errors, fmt.Sprintf("%s: %v", att.Filename, err))
+			continue
+		}
+
+		// Copy content
+		n, err := io.Copy(w, srcFile)
+		srcFile.Close()
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", att.Filename, err))
+			continue
+		}
+
+		exportedCount++
+		totalSize += n
+	}
+
+	// Close zip writer to finalize
+	zipWriter.Close()
+	zipFile.Close()
+
+	// Build result message
+	m.modal = ModalExportResult
+	if exportedCount == 0 {
+		// Remove empty zip file
+		os.Remove(zipFilename)
+		m.modalResult = "No attachments exported.\n\nErrors:\n" + joinStrings(errors, "\n")
+	} else {
+		cwd, _ := os.Getwd()
+		fullPath := filepath.Join(cwd, zipFilename)
+		m.modalResult = fmt.Sprintf("Exported %d attachment(s) (%s)\n\nSaved to:\n%s",
+			exportedCount, formatBytesLong(totalSize), fullPath)
+		if len(errors) > 0 {
+			m.modalResult += "\n\nErrors:\n" + joinStrings(errors, "\n")
+		}
+	}
+
+	m.exportSelection = nil
+	return m, nil
+}
+
+// sanitizeFilename removes or replaces characters that are invalid in filenames.
+func sanitizeFilename(s string) string {
+	var result []rune
+	for _, r := range s {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t':
+			result = append(result, '_')
+		default:
+			result = append(result, r)
+		}
+	}
+	return string(result)
+}
+
+// joinStrings joins strings with a separator.
+func joinStrings(strs []string, sep string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	result := strs[0]
+	for i := 1; i < len(strs); i++ {
+		result += sep + strs[i]
+	}
+	return result
+}
+
+// formatBytesLong formats bytes with full precision for export results.
+func formatBytesLong(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

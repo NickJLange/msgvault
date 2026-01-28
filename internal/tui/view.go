@@ -925,9 +925,12 @@ func (m Model) footerView() string {
 		keys = []string{
 			"←/→ prev/next",
 			"↑/↓ scroll",
-			"Esc back",
-			"q quit",
 		}
+		// Show export option if message has attachments
+		if m.messageDetail != nil && len(m.messageDetail.Attachments) > 0 {
+			keys = append(keys, "e export")
+		}
+		keys = append(keys, "Esc back", "q quit")
 		// Show message position (N/M) in the list - reuse total from parent view
 		if len(m.messages) > 0 {
 			total := int64(len(m.messages))
@@ -1247,7 +1250,40 @@ func (m Model) overlayModal(background string) string {
 		modalContent += "  /           Search\n"
 		modalContent += "  A           Select account\n"
 		modalContent += "  f           Filter by attachments\n"
+		modalContent += "  e           Export attachments (in message view)\n"
 		modalContent += "  q           Quit\n\n"
+		modalContent += "Press any key to close"
+
+	case ModalExportAttachments:
+		modalContent = modalTitleStyle.Render("Export Attachments") + "\n\n"
+		if m.messageDetail != nil && len(m.messageDetail.Attachments) > 0 {
+			modalContent += "Select attachments to export:\n\n"
+			for i, att := range m.messageDetail.Attachments {
+				cursor := " "
+				if i == m.exportCursor {
+					cursor = "▶"
+				}
+				checkbox := "☐"
+				if m.exportSelection[i] {
+					checkbox = "☑"
+				}
+				modalContent += fmt.Sprintf("%s %s %s (%s)\n", cursor, checkbox, att.Filename, formatBytes(att.Size))
+			}
+			// Count selected
+			selectedCount := 0
+			for _, selected := range m.exportSelection {
+				if selected {
+					selectedCount++
+				}
+			}
+			modalContent += fmt.Sprintf("\n%d of %d selected\n", selectedCount, len(m.messageDetail.Attachments))
+			modalContent += "\n[↑/↓] Navigate  [Space] Toggle  [a] All  [n] None\n"
+			modalContent += "[Enter] Export  [Esc] Cancel"
+		}
+
+	case ModalExportResult:
+		modalContent = modalTitleStyle.Render("Export Complete") + "\n\n"
+		modalContent += m.modalResult + "\n\n"
 		modalContent += "Press any key to close"
 	}
 

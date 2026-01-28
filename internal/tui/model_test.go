@@ -4377,3 +4377,101 @@ func TestMessageListDKeyAutoSelectsCurrentMessage(t *testing.T) {
 		t.Errorf("expected ModalDeleteConfirm, got %v", m.modal)
 	}
 }
+
+func TestExportAttachmentsModal(t *testing.T) {
+	engine := &mockEngine{}
+
+	model := New(engine, "/tmp/test", "test123")
+	model.level = LevelMessageDetail
+	model.pageSize = 10
+	model.width = 100
+	model.height = 20
+	model.messageDetail = &query.MessageDetail{
+		ID:      1,
+		Subject: "Test Email",
+		Attachments: []query.AttachmentInfo{
+			{ID: 1, Filename: "file1.pdf", Size: 1024, ContentHash: "abc123"},
+			{ID: 2, Filename: "file2.txt", Size: 512, ContentHash: "def456"},
+		},
+	}
+
+	// Press 'e' to open export modal
+	newModel, _ := model.handleMessageDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	m := newModel.(Model)
+
+	if m.modal != ModalExportAttachments {
+		t.Errorf("expected ModalExportAttachments, got %v", m.modal)
+	}
+
+	// Should have all attachments selected by default
+	if len(m.exportSelection) != 2 {
+		t.Errorf("expected 2 attachments in selection, got %d", len(m.exportSelection))
+	}
+	if !m.exportSelection[0] || !m.exportSelection[1] {
+		t.Error("expected all attachments to be selected by default")
+	}
+
+	// Test navigation - move cursor down
+	newModel, _ = m.handleModalKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = newModel.(Model)
+	if m.exportCursor != 1 {
+		t.Errorf("expected exportCursor = 1, got %d", m.exportCursor)
+	}
+
+	// Test toggle selection with space
+	newModel, _ = m.handleModalKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	m = newModel.(Model)
+	if m.exportSelection[1] {
+		t.Error("expected attachment 1 to be deselected after space")
+	}
+
+	// Test select none
+	newModel, _ = m.handleModalKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = newModel.(Model)
+	if m.exportSelection[0] || m.exportSelection[1] {
+		t.Error("expected all attachments to be deselected after 'n'")
+	}
+
+	// Test select all
+	newModel, _ = m.handleModalKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = newModel.(Model)
+	if !m.exportSelection[0] || !m.exportSelection[1] {
+		t.Error("expected all attachments to be selected after 'a'")
+	}
+
+	// Test cancel with Esc
+	newModel, _ = m.handleModalKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(Model)
+	if m.modal != ModalNone {
+		t.Errorf("expected ModalNone after Esc, got %v", m.modal)
+	}
+	if m.exportSelection != nil {
+		t.Error("expected exportSelection to be cleared after Esc")
+	}
+}
+
+func TestExportAttachmentsNoAttachments(t *testing.T) {
+	engine := &mockEngine{}
+
+	model := New(engine, "/tmp/test", "test123")
+	model.level = LevelMessageDetail
+	model.pageSize = 10
+	model.width = 100
+	model.height = 20
+	model.messageDetail = &query.MessageDetail{
+		ID:          1,
+		Subject:     "Test Email",
+		Attachments: []query.AttachmentInfo{}, // No attachments
+	}
+
+	// Press 'e' should show flash message, not modal
+	newModel, _ := model.handleMessageDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	m := newModel.(Model)
+
+	if m.modal == ModalExportAttachments {
+		t.Error("expected modal NOT to open when no attachments")
+	}
+	if m.flashMessage != "No attachments to export" {
+		t.Errorf("expected flash message 'No attachments to export', got '%s'", m.flashMessage)
+	}
+}
