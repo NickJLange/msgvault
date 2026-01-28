@@ -1,5 +1,8 @@
 # msgvault
 
+> **Warning**
+> This is alpha software in rapid development. Expect breaking changes, incomplete features, and potential data loss. Use at your own risk and always maintain backups of important data.
+
 msgvault is an offline Gmail archive tool that exports and stores your
 email data locally with full-text search capabilities. It's designed
 to archive years of Gmail from multiple accounts, make it searchable
