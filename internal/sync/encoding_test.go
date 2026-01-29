@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -74,17 +75,7 @@ func TestEnsureUTF8_Windows1252(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ensureUTF8(string(tt.input))
-			if result != tt.expected {
-				t.Errorf("ensureUTF8(%q) = %q, want %q", tt.input, result, tt.expected)
-			}
-			if !utf8.ValidString(result) {
-				t.Errorf("result is not valid UTF-8")
-			}
-		})
-	}
+	runEncodingTests(t, tests)
 }
 
 func TestEnsureUTF8_Latin1(t *testing.T) {
@@ -126,17 +117,7 @@ func TestEnsureUTF8_Latin1(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ensureUTF8(string(tt.input))
-			if result != tt.expected {
-				t.Errorf("ensureUTF8(%q) = %q, want %q", tt.input, result, tt.expected)
-			}
-			if !utf8.ValidString(result) {
-				t.Errorf("result is not valid UTF-8")
-			}
-		})
-	}
+	runEncodingTests(t, tests)
 }
 
 func TestEnsureUTF8_AsianEncodings(t *testing.T) {
@@ -203,7 +184,7 @@ func TestEnsureUTF8_MixedContent(t *testing.T) {
 				t.Errorf("result is not valid UTF-8: %q", result)
 			}
 			for _, substr := range tt.contains {
-				if !contains(result, substr) {
+				if !strings.Contains(result, substr) {
 					t.Errorf("result %q should contain %q", result, substr)
 				}
 			}
@@ -292,17 +273,21 @@ func TestGetEncodingByName(t *testing.T) {
 	}
 }
 
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+// Helper to run table-driven encoding tests
+func runEncodingTests(t *testing.T, tests []struct {
+	name     string
+	input    []byte
+	expected string
+}) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ensureUTF8(string(tt.input))
+			if result != tt.expected {
+				t.Errorf("got %q, want %q", result, tt.expected)
+			}
+			if !utf8.ValidString(result) {
+				t.Errorf("result is not valid UTF-8")
+			}
+		})
 	}
-	return false
 }
