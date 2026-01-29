@@ -1278,7 +1278,7 @@ func TestSubGroupingNavigation(t *testing.T) {
 
 	// Test Tab in sub-aggregate cycles views (skipping drill view type)
 	m.rows = engine.rows // Simulate data loaded
-	newModel, cmd = m.handleSubAggregateKeys(keyTab())
+	newModel, cmd = m.handleAggregateKeys(keyTab())
 	m = newModel.(Model)
 
 	// Should skip Senders (drill view type) and go to Domains
@@ -1291,7 +1291,7 @@ func TestSubGroupingNavigation(t *testing.T) {
 
 	// Test Esc goes back to message list (not all the way to aggregates)
 	m.rows = engine.rows
-	newModel, _ = m.handleSubAggregateKeys(keyEsc())
+	newModel, _ = m.handleAggregateKeys(keyEsc())
 	m = newModel.(Model)
 
 	if m.level != levelMessageList {
@@ -1405,7 +1405,7 @@ func TestSubAggregateDrillDown(t *testing.T) {
 	model.rows = engine.rows
 
 	// Press Enter on recipient - should go to message list with combined filter
-	newModel, cmd := model.handleSubAggregateKeys(keyEnter())
+	newModel, cmd := model.handleAggregateKeys(keyEnter())
 	m := newModel.(Model)
 
 	if m.level != levelMessageList {
@@ -1730,7 +1730,7 @@ func TestSearchFromSubAggregate(t *testing.T) {
 	model.rows = engine.rows
 
 	// Press '/' to activate inline search
-	newModel, cmd := model.handleSubAggregateKeys(key('/'))
+	newModel, cmd := model.handleAggregateKeys(key('/'))
 	m := newModel.(Model)
 
 	if !m.inlineSearchActive {
@@ -1865,7 +1865,7 @@ func TestGKeyInSubAggregate(t *testing.T) {
 	model.drillFilter = query.MessageFilter{Sender: "alice@example.com"}
 
 	// Press 'g' - should cycle to next view type, skipping drillViewType
-	newModel, _ := model.handleSubAggregateKeys(key('g'))
+	newModel, _ := model.handleAggregateKeys(key('g'))
 	m := newModel.(Model)
 
 	// Should skip ViewSenders (the drillViewType) and go to Domains
@@ -2243,7 +2243,7 @@ func TestContextStatsRestoredOnGoBackToSubAggregate(t *testing.T) {
 	}
 
 	// Step 3: Drill down from sub-aggregate to message list (contextStats overwritten)
-	newModel3, _ := m2.handleSubAggregateKeys(keyEnter())
+	newModel3, _ := m2.handleAggregateKeys(keyEnter())
 	m3 := newModel3.(Model)
 	if m3.level != levelMessageList {
 		t.Fatalf("expected levelMessageList after Enter, got %v", m3.level)
@@ -2887,7 +2887,7 @@ func TestSubAggregateDrillDownWithSearchQuery(t *testing.T) {
 	model.viewType = query.ViewLabels
 	model.cursor = 0
 
-	newModel, cmd := model.handleSubAggregateKeys(keyEnter())
+	newModel, cmd := model.handleAggregateKeys(keyEnter())
 	m := newModel.(Model)
 
 	if m.level != levelMessageList {
@@ -4449,7 +4449,7 @@ func TestSubAggregateAKeyJumpsToMessages(t *testing.T) {
 	model.height = 20
 
 	// Press 'a' to jump to all messages (with drill filter)
-	newModel, cmd := model.handleSubAggregateKeys(key('a'))
+	newModel, cmd := model.handleAggregateKeys(key('a'))
 	m := newModel.(Model)
 
 	// Should navigate to message list

@@ -1,0 +1,260 @@
+package tui
+
+import (
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/wesm/msgvault/internal/query"
+)
+
+// viewLevel represents the current navigation depth.
+type viewLevel int
+
+const (
+	levelAggregates   viewLevel = iota
+	levelSubAggregate           // Sub-grouping after drill-down
+	levelMessageList
+	levelMessageDetail
+	levelThreadView // Thread/conversation view showing all messages in a thread
+)
+
+// viewState encapsulates the state for a specific view (cursor, sort, filters, data).
+type viewState struct {
+	level           viewLevel
+	viewType        query.ViewType
+	timeGranularity query.TimeGranularity
+	sortField       query.SortField
+	sortDirection   query.SortDirection
+	msgSortField     query.MessageSortField
+	msgSortDirection query.SortDirection
+	cursor          int
+	scrollOffset    int
+	filterKey       string              // The aggregate key used to filter messages
+	allMessages     bool                // True when showing all messages (not filtered by aggregate)
+	drillFilter     query.MessageFilter // Filter from parent drill-down
+	drillViewType   query.ViewType      // ViewType that created the drill filter
+	contextStats    *query.TotalStats   // Contextual stats for header display
+	searchQuery     string              // Active search query (for aggregate filtering)
+	searchFilter    query.MessageFilter // Context filter applied to search
+	
+	// Data
+	rows         []query.AggregateRow
+	messages      []query.MessageSummary
+	messageDetail *query.MessageDetail
+	
+	// Detail view specific
+	detailScroll         int
+	detailLineCount      int
+	detailMessageIndex   int
+	detailFromThread     bool
+	pendingDetailSubject string
+
+	// Detail search (find-in-page)
+	detailSearchActive     bool
+	detailSearchInput      textinput.Model
+	detailSearchQuery      string
+	detailSearchMatches    []int // Line indices with matches
+	detailSearchMatchIndex int   // Current match index
+	
+	// Thread view specific
+	threadConversationID int64
+	threadMessages       []query.MessageSummary
+	threadCursor         int
+	threadScrollOffset   int
+	threadTruncated      bool
+}
+
+// navigationSnapshot stores state for navigation history.
+type navigationSnapshot struct {
+	state viewState
+}
+
+func (m *Model) ensureThreadCursorVisible() {
+	if m.threadCursor < m.threadScrollOffset {
+		m.threadScrollOffset = m.threadCursor
+	} else if m.threadCursor >= m.threadScrollOffset+m.pageSize {
+		m.threadScrollOffset = m.threadCursor - m.pageSize + 1
+	}
+}
+
+func (m Model) navigateDetailPrev() (tea.Model, tea.Cmd) {
+	// Use thread messages if we entered from thread view, otherwise use list messages
+	var msgs []query.MessageSummary
+	if m.detailFromThread {
+		msgs = m.threadMessages
+	} else {
+		msgs = m.messages
+	}
+
+	// Guard against empty message list
+	if len(msgs) == 0 {
+		return m.showFlash("No messages loaded")
+	}
+
+	// Clamp index if it's out of bounds (can happen if list changed)
+	if m.detailMessageIndex >= len(msgs) {
+		m.detailMessageIndex = len(msgs) - 1
+	}
+
+	if m.detailMessageIndex > 0 {
+		// Go to previous message
+		m.detailMessageIndex--
+		// Keep appropriate cursor in sync
+		if m.detailFromThread {
+			m.threadCursor = m.detailMessageIndex
+			// Ensure thread scroll offset keeps cursor visible when returning
+			if m.threadCursor < m.threadScrollOffset {
+				m.threadScrollOffset = m.threadCursor
+			}
+		} else {
+			m.cursor = m.detailMessageIndex
+		}
+		m.pendingDetailSubject = msgs[m.detailMessageIndex].Subject
+		// Keep old messageDetail visible while new one loads (no flash)
+		m.detailScroll = 0
+		m.loading = true
+		m.err = nil
+		m.detailRequestID++
+		return m, m.loadMessageDetail(msgs[m.detailMessageIndex].ID)
+	}
+
+	// At the first message - show flash notification
+	return m.showFlash("At first message")
+}
+
+func (m Model) navigateDetailNext() (tea.Model, tea.Cmd) {
+	// Use thread messages if we entered from thread view, otherwise use list messages
+	var msgs []query.MessageSummary
+	if m.detailFromThread {
+		msgs = m.threadMessages
+	} else {
+		msgs = m.messages
+	}
+
+	// Guard against empty message list
+	if len(msgs) == 0 {
+		return m.showFlash("No messages loaded")
+	}
+
+	// Clamp index if it's out of bounds (can happen if list changed)
+	if m.detailMessageIndex >= len(msgs) {
+		m.detailMessageIndex = len(msgs) - 1
+	}
+
+	if m.detailMessageIndex < len(msgs)-1 {
+		// Go to next message
+		m.detailMessageIndex++
+		// Keep appropriate cursor in sync
+		if m.detailFromThread {
+			m.threadCursor = m.detailMessageIndex
+			// Ensure thread scroll offset keeps cursor visible when returning
+			if m.threadCursor >= m.threadScrollOffset+m.pageSize {
+				m.threadScrollOffset = m.threadCursor - m.pageSize + 1
+			}
+		} else {
+			m.cursor = m.detailMessageIndex
+		}
+		m.pendingDetailSubject = msgs[m.detailMessageIndex].Subject
+		// Keep old messageDetail visible while new one loads (no flash)
+		m.detailScroll = 0
+		m.loading = true
+		m.err = nil
+		m.detailRequestID++
+		return m, m.loadMessageDetail(msgs[m.detailMessageIndex].ID)
+	}
+
+	// At the last message - show flash notification
+	return m.showFlash("At last message")
+}
+
+func (m Model) goBack() (tea.Model, tea.Cmd) {
+	if len(m.breadcrumbs) == 0 {
+		return m, nil
+	}
+
+	m.frozenView = "" // Clear frozen view on navigation back
+
+	// Pop breadcrumb
+	bc := m.breadcrumbs[len(m.breadcrumbs)-1]
+	m.breadcrumbs = m.breadcrumbs[:len(m.breadcrumbs)-1]
+
+	// Track current cursor if we need to preserve it (e.g. from detail navigation)
+	currentCursor := m.cursor
+	currentLevel := m.level
+
+	// Restore complete state from snapshot
+	m.viewState = bc.state
+
+	// Special case: returning from detail view to message list
+	// The user might have navigated left/right in detail view.
+	// If we simply restore `bc.state`, we revert to the cursor when we entered detail view.
+	// We want to keep the NEW cursor if we just navigated.
+	if currentLevel == levelMessageDetail && m.level == levelMessageList {
+		m.cursor = currentCursor
+		m.ensureCursorVisible()
+	}
+
+	m.err = nil       // Clear any stale error
+	m.loading = false // Data is restored from snapshot
+
+	return m, nil
+}
+
+func (m *Model) ensureCursorVisible() {
+	if m.cursor < m.scrollOffset {
+		m.scrollOffset = m.cursor
+	}
+	if m.cursor >= m.scrollOffset+m.pageSize {
+		m.scrollOffset = m.cursor - m.pageSize + 1
+	}
+}
+
+func (m *Model) pushBreadcrumb() {
+	m.breadcrumbs = append(m.breadcrumbs, navigationSnapshot{state: m.viewState})
+}
+
+func (m *Model) navigateList(key string, itemCount int) bool {
+	switch key {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+			m.ensureCursorVisible()
+		}
+		return true
+	case "down", "j":
+		if m.cursor < itemCount-1 {
+			m.cursor++
+			m.ensureCursorVisible()
+		}
+		return true
+	case "pgup", "ctrl+u":
+		m.cursor -= m.pageSize
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.ensureCursorVisible()
+		return true
+	case "pgdown", "ctrl+d":
+		m.cursor += m.pageSize
+		if m.cursor >= itemCount {
+			m.cursor = itemCount - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.ensureCursorVisible()
+		return true
+	case "home":
+		m.cursor = 0
+		m.scrollOffset = 0
+		return true
+	case "end", "G":
+		m.cursor = itemCount - 1
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.ensureCursorVisible()
+		return true
+	}
+	return false
+}
+
