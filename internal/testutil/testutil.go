@@ -166,3 +166,12 @@ func MustNotExist(t *testing.T, path string) {
 		t.Fatalf("unexpected error checking %s: %v", path, err)
 	}
 }
+
+// MustNoErr fails the test immediately if err is non-nil.
+// Use this for setup operations where failure means the test cannot proceed.
+func MustNoErr(t *testing.T, err error, msg string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: %v", msg, err)
+	}
+}

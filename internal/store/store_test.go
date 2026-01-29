@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,13 +11,38 @@ import (
 	"github.com/wesm/msgvault/internal/testutil"
 )
 
-// mustNoErr fails the test immediately if err is non-nil.
-// Use this for setup operations where failure means the test cannot proceed.
-func mustNoErr(t *testing.T, err error, msg string) {
+// Helper functions
+
+func setupStore(t *testing.T) (*store.Store, *store.Source, int64) {
 	t.Helper()
-	if err != nil {
-		t.Fatalf("%s: %v", msg, err)
+	st := testutil.NewTestStore(t)
+	source, err := st.GetOrCreateSource("gmail", "test@example.com")
+	testutil.MustNoErr(t, err, "setup: GetOrCreateSource")
+	convID, err := st.EnsureConversation(source.ID, "default-thread", "Default Thread")
+	testutil.MustNoErr(t, err, "setup: EnsureConversation")
+	return st, source, convID
+}
+
+func createMessage(t *testing.T, st *store.Store, sourceID, convID int64, msgID string) int64 {
+	t.Helper()
+	id, err := st.UpsertMessage(&store.Message{
+		ConversationID:  convID,
+		SourceID:        sourceID,
+		SourceMessageID: msgID,
+		MessageType:     "email",
+		SizeEstimate:    1000,
+	})
+	testutil.MustNoErr(t, err, "createMessage")
+	return id
+}
+
+func createMessages(t *testing.T, st *store.Store, sourceID, convID int64, count int) []int64 {
+	t.Helper()
+	var ids []int64
+	for i := 0; i < count; i++ {
+		ids = append(ids, createMessage(t, st, sourceID, convID, fmt.Sprintf("msg-%d", i)))
 	}
+	return ids
 }
 
 func TestStore_Open(t *testing.T) {
@@ -42,7 +68,8 @@ func TestStore_GetStats_Empty(t *testing.T) {
 }
 
 func TestStore_Source_CreateAndGet(t *testing.T) {
-	st := testutil.NewTestStore(t)
+
+st := testutil.NewTestStore(t)
 
 	// Create source
 	source, err := st.GetOrCreateSource("gmail", "test@example.com")
@@ -72,14 +99,10 @@ func TestStore_Source_CreateAndGet(t *testing.T) {
 }
 
 func TestStore_Source_UpdateSyncCursor(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	if err != nil {
-		t.Fatalf("GetOrCreateSource() error = %v", err)
-	}
+st, source, _ := setupStore(t)
 
-	err = st.UpdateSourceSyncCursor(source.ID, "12345")
+	err := st.UpdateSourceSyncCursor(source.ID, "12345")
 	if err != nil {
 		t.Fatalf("UpdateSourceSyncCursor() error = %v", err)
 	}
@@ -96,10 +119,8 @@ func TestStore_Source_UpdateSyncCursor(t *testing.T) {
 }
 
 func TestStore_Conversation(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
 
 	// Create conversation
 	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test Thread")
@@ -123,12 +144,8 @@ func TestStore_Conversation(t *testing.T) {
 }
 
 func TestStore_Message_Upsert(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test Thread")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	msg := &store.Message{
 		ConversationID:  convID,
@@ -164,30 +181,20 @@ func TestStore_Message_Upsert(t *testing.T) {
 
 	// Verify stats
 	stats, err := st.GetStats()
-	mustNoErr(t, err, "GetStats")
+	testutil.MustNoErr(t, err, "GetStats")
 	if stats.MessageCount != 1 {
 		t.Errorf("MessageCount = %d, want 1", stats.MessageCount)
 	}
 }
 
 func TestStore_MessageExistsBatch(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	// Insert some messages
 	ids := []string{"msg-1", "msg-2", "msg-3"}
 	for _, id := range ids {
-		_, err := st.UpsertMessage(&store.Message{
-			ConversationID:  convID,
-			SourceID:        source.ID,
-			SourceMessageID: id,
-			MessageType:     "email",
-		})
-		mustNoErr(t, err, "UpsertMessage")
+		createMessage(t, st, source.ID, convID, id)
 	}
 
 	// Check which exist
@@ -212,25 +219,15 @@ func TestStore_MessageExistsBatch(t *testing.T) {
 }
 
 func TestStore_MessageRaw(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
-	msgID, err := st.UpsertMessage(&store.Message{
-		ConversationID:  convID,
-		SourceID:        source.ID,
-		SourceMessageID: "msg-1",
-		MessageType:     "email",
-	})
-	mustNoErr(t, err, "UpsertMessage")
+	msgID := createMessage(t, st, source.ID, convID, "msg-1")
 
 	rawData := []byte("From: test@example.com\r\nSubject: Test\r\n\r\nBody")
 
 	// Store raw data
-	err = st.UpsertMessageRaw(msgID, rawData)
+	err := st.UpsertMessageRaw(msgID, rawData)
 	if err != nil {
 		t.Fatalf("UpsertMessageRaw() error = %v", err)
 	}
@@ -247,7 +244,8 @@ func TestStore_MessageRaw(t *testing.T) {
 }
 
 func TestStore_Participant(t *testing.T) {
-	st := testutil.NewTestStore(t)
+
+st := testutil.NewTestStore(t)
 
 	// Create participant
 	pid, err := st.EnsureParticipant("alice@example.com", "Alice Smith", "example.com")
@@ -271,7 +269,8 @@ func TestStore_Participant(t *testing.T) {
 }
 
 func TestStore_EnsureParticipantsBatch(t *testing.T) {
-	st := testutil.NewTestStore(t)
+
+st := testutil.NewTestStore(t)
 
 	addresses := []mime.Address{
 		{Email: "alice@example.com", Name: "Alice", Domain: "example.com"},
@@ -296,10 +295,8 @@ func TestStore_EnsureParticipantsBatch(t *testing.T) {
 }
 
 func TestStore_Label(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
 
 	// Create label
 	lid, err := st.EnsureLabel(source.ID, "INBOX", "Inbox", "system")
@@ -323,10 +320,8 @@ func TestStore_Label(t *testing.T) {
 }
 
 func TestStore_EnsureLabelsBatch(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
 
 	labels := map[string]string{
 		"INBOX":       "Inbox",
@@ -350,25 +345,15 @@ func TestStore_EnsureLabelsBatch(t *testing.T) {
 }
 
 func TestStore_MessageLabels(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
-	msgID, err := st.UpsertMessage(&store.Message{
-		ConversationID:  convID,
-		SourceID:        source.ID,
-		SourceMessageID: "msg-1",
-		MessageType:     "email",
-	})
-	mustNoErr(t, err, "UpsertMessage")
+	msgID := createMessage(t, st, source.ID, convID, "msg-1")
 
 	lid1, err := st.EnsureLabel(source.ID, "INBOX", "Inbox", "system")
-	mustNoErr(t, err, "EnsureLabel INBOX")
+	testutil.MustNoErr(t, err, "EnsureLabel INBOX")
 	lid2, err := st.EnsureLabel(source.ID, "STARRED", "Starred", "system")
-	mustNoErr(t, err, "EnsureLabel STARRED")
+	testutil.MustNoErr(t, err, "EnsureLabel STARRED")
 
 	// Set labels
 	err = st.ReplaceMessageLabels(msgID, []int64{lid1, lid2})
@@ -379,14 +364,14 @@ func TestStore_MessageLabels(t *testing.T) {
 	// Verify labels were set (query message_labels directly)
 	var count int
 	err = st.DB().QueryRow(st.Rebind("SELECT COUNT(*) FROM message_labels WHERE message_id = ?"), msgID).Scan(&count)
-	mustNoErr(t, err, "count labels")
+	testutil.MustNoErr(t, err, "count labels")
 	if count != 2 {
 		t.Errorf("label count = %d, want 2", count)
 	}
 
 	// Replace with different labels
 	lid3, err := st.EnsureLabel(source.ID, "SENT", "Sent", "system")
-	mustNoErr(t, err, "EnsureLabel SENT")
+	testutil.MustNoErr(t, err, "EnsureLabel SENT")
 	err = st.ReplaceMessageLabels(msgID, []int64{lid3})
 	if err != nil {
 		t.Fatalf("ReplaceMessageLabels() replace error = %v", err)
@@ -394,7 +379,7 @@ func TestStore_MessageLabels(t *testing.T) {
 
 	// Verify only new label remains
 	err = st.DB().QueryRow(st.Rebind("SELECT COUNT(*) FROM message_labels WHERE message_id = ?"), msgID).Scan(&count)
-	mustNoErr(t, err, "count labels after replace")
+	testutil.MustNoErr(t, err, "count labels after replace")
 	if count != 1 {
 		t.Errorf("label count after replace = %d, want 1", count)
 	}
@@ -402,32 +387,22 @@ func TestStore_MessageLabels(t *testing.T) {
 	// Verify it's the right label
 	var labelID int64
 	err = st.DB().QueryRow(st.Rebind("SELECT label_id FROM message_labels WHERE message_id = ?"), msgID).Scan(&labelID)
-	mustNoErr(t, err, "get label_id")
+	testutil.MustNoErr(t, err, "get label_id")
 	if labelID != lid3 {
 		t.Errorf("label_id = %d, want %d (SENT)", labelID, lid3)
 	}
 }
 
 func TestStore_MessageRecipients(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
-	msgID, err := st.UpsertMessage(&store.Message{
-		ConversationID:  convID,
-		SourceID:        source.ID,
-		SourceMessageID: "msg-1",
-		MessageType:     "email",
-	})
-	mustNoErr(t, err, "UpsertMessage")
+	msgID := createMessage(t, st, source.ID, convID, "msg-1")
 
 	pid1, err := st.EnsureParticipant("alice@example.com", "Alice", "example.com")
-	mustNoErr(t, err, "EnsureParticipant alice")
+	testutil.MustNoErr(t, err, "EnsureParticipant alice")
 	pid2, err := st.EnsureParticipant("bob@example.org", "Bob", "example.org")
-	mustNoErr(t, err, "EnsureParticipant bob")
+	testutil.MustNoErr(t, err, "EnsureParticipant bob")
 
 	// Set recipients
 	err = st.ReplaceMessageRecipients(msgID, "to", []int64{pid1, pid2}, []string{"Alice", "Bob"})
@@ -438,7 +413,7 @@ func TestStore_MessageRecipients(t *testing.T) {
 	// Verify recipients were set
 	var count int
 	err = st.DB().QueryRow(st.Rebind("SELECT COUNT(*) FROM message_recipients WHERE message_id = ? AND recipient_type = 'to'"), msgID).Scan(&count)
-	mustNoErr(t, err, "count recipients")
+	testutil.MustNoErr(t, err, "count recipients")
 	if count != 2 {
 		t.Errorf("recipient count = %d, want 2", count)
 	}
@@ -451,7 +426,7 @@ func TestStore_MessageRecipients(t *testing.T) {
 
 	// Verify only one recipient remains
 	err = st.DB().QueryRow(st.Rebind("SELECT COUNT(*) FROM message_recipients WHERE message_id = ? AND recipient_type = 'to'"), msgID).Scan(&count)
-	mustNoErr(t, err, "count recipients after replace")
+	testutil.MustNoErr(t, err, "count recipients after replace")
 	if count != 1 {
 		t.Errorf("recipient count after replace = %d, want 1", count)
 	}
@@ -459,32 +434,22 @@ func TestStore_MessageRecipients(t *testing.T) {
 	// Verify it's the right recipient
 	var participantID int64
 	err = st.DB().QueryRow(st.Rebind("SELECT participant_id FROM message_recipients WHERE message_id = ? AND recipient_type = 'to'"), msgID).Scan(&participantID)
-	mustNoErr(t, err, "get participant_id")
+	testutil.MustNoErr(t, err, "get participant_id")
 	if participantID != pid1 {
 		t.Errorf("participant_id = %d, want %d (alice)", participantID, pid1)
 	}
 }
 
 func TestStore_MarkMessageDeleted(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
-	msgID, err := st.UpsertMessage(&store.Message{
-		ConversationID:  convID,
-		SourceID:        source.ID,
-		SourceMessageID: "msg-1",
-		MessageType:     "email",
-	})
-	mustNoErr(t, err, "UpsertMessage")
+	msgID := createMessage(t, st, source.ID, convID, "msg-1")
 
 	// Verify not deleted initially
 	var deletedAt sql.NullTime
-	err = st.DB().QueryRow(st.Rebind("SELECT deleted_from_source_at FROM messages WHERE id = ?"), msgID).Scan(&deletedAt)
-	mustNoErr(t, err, "check deleted_from_source_at before")
+	err := st.DB().QueryRow(st.Rebind("SELECT deleted_from_source_at FROM messages WHERE id = ?"), msgID).Scan(&deletedAt)
+	testutil.MustNoErr(t, err, "check deleted_from_source_at before")
 	if deletedAt.Valid {
 		t.Error("deleted_from_source_at should be NULL before MarkMessageDeleted")
 	}
@@ -496,19 +461,15 @@ func TestStore_MarkMessageDeleted(t *testing.T) {
 
 	// Verify deleted flag is now set
 	err = st.DB().QueryRow(st.Rebind("SELECT deleted_from_source_at FROM messages WHERE id = ?"), msgID).Scan(&deletedAt)
-	mustNoErr(t, err, "check deleted_from_source_at after")
+	testutil.MustNoErr(t, err, "check deleted_from_source_at after")
 	if !deletedAt.Valid {
 		t.Error("deleted_from_source_at should be set after MarkMessageDeleted")
 	}
 }
 
 func TestStore_Attachment(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	msgID, err := st.UpsertMessage(&store.Message{
 		ConversationID:  convID,
@@ -517,7 +478,7 @@ func TestStore_Attachment(t *testing.T) {
 		MessageType:     "email",
 		HasAttachments:  true,
 	})
-	mustNoErr(t, err, "UpsertMessage")
+	testutil.MustNoErr(t, err, "UpsertMessage")
 
 	err = st.UpsertAttachment(msgID, "document.pdf", "application/pdf", "/path/to/file", "abc123hash", 1024)
 	if err != nil {
@@ -531,17 +492,15 @@ func TestStore_Attachment(t *testing.T) {
 	}
 
 	stats, err := st.GetStats()
-	mustNoErr(t, err, "GetStats")
+	testutil.MustNoErr(t, err, "GetStats")
 	if stats.AttachmentCount != 1 {
 		t.Errorf("AttachmentCount = %d, want 1", stats.AttachmentCount)
 	}
 }
 
 func TestStore_SyncRun(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
 
 	// Start a sync
 	syncID, err := st.StartSync(source.ID, "full")
@@ -571,12 +530,11 @@ func TestStore_SyncRun(t *testing.T) {
 }
 
 func TestStore_SyncCheckpoint(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
+
 	syncID, err := st.StartSync(source.ID, "full")
-	mustNoErr(t, err, "StartSync")
+	testutil.MustNoErr(t, err, "StartSync")
 
 	cp := &store.Checkpoint{
 		PageToken:         "next-page-token",
@@ -593,7 +551,7 @@ func TestStore_SyncCheckpoint(t *testing.T) {
 
 	// Verify checkpoint was saved
 	active, err := st.GetActiveSync(source.ID)
-	mustNoErr(t, err, "GetActiveSync")
+	testutil.MustNoErr(t, err, "GetActiveSync")
 	if active == nil {
 		t.Fatal("expected active sync, got nil")
 	}
@@ -603,12 +561,11 @@ func TestStore_SyncCheckpoint(t *testing.T) {
 }
 
 func TestStore_SyncComplete(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
+
 	syncID, err := st.StartSync(source.ID, "full")
-	mustNoErr(t, err, "StartSync")
+	testutil.MustNoErr(t, err, "StartSync")
 
 	err = st.CompleteSync(syncID, "history-12345")
 	if err != nil {
@@ -617,7 +574,7 @@ func TestStore_SyncComplete(t *testing.T) {
 
 	// Active sync should be nil now
 	active, err := st.GetActiveSync(source.ID)
-	mustNoErr(t, err, "GetActiveSync")
+	testutil.MustNoErr(t, err, "GetActiveSync")
 	if active != nil {
 		t.Errorf("expected no active sync after completion, got %+v", active)
 	}
@@ -636,12 +593,11 @@ func TestStore_SyncComplete(t *testing.T) {
 }
 
 func TestStore_SyncFail(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
+
 	syncID, err := st.StartSync(source.ID, "full")
-	mustNoErr(t, err, "StartSync")
+	testutil.MustNoErr(t, err, "StartSync")
 
 	err = st.FailSync(syncID, "network error")
 	if err != nil {
@@ -650,7 +606,7 @@ func TestStore_SyncFail(t *testing.T) {
 
 	// Active sync should be nil now
 	active, err := st.GetActiveSync(source.ID)
-	mustNoErr(t, err, "GetActiveSync")
+	testutil.MustNoErr(t, err, "GetActiveSync")
 	if active != nil {
 		t.Errorf("expected no active sync after failure, got %+v", active)
 	}
@@ -658,7 +614,7 @@ func TestStore_SyncFail(t *testing.T) {
 	// Verify sync status is "failed" and error message is stored
 	var status, errorMsg string
 	err = st.DB().QueryRow(st.Rebind("SELECT status, error_message FROM sync_runs WHERE id = ?"), syncID).Scan(&status, &errorMsg)
-	mustNoErr(t, err, "query sync status")
+	testutil.MustNoErr(t, err, "query sync status")
 	if status != "failed" {
 		t.Errorf("sync status = %q, want %q", status, "failed")
 	}
@@ -668,23 +624,13 @@ func TestStore_SyncFail(t *testing.T) {
 }
 
 func TestStore_MarkMessageDeletedByGmailID(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-123", "Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
-	_, err = st.UpsertMessage(&store.Message{
-		ConversationID:  convID,
-		SourceID:        source.ID,
-		SourceMessageID: "gmail-msg-123",
-		MessageType:     "email",
-	})
-	mustNoErr(t, err, "UpsertMessage")
+	createMessage(t, st, source.ID, convID, "gmail-msg-123")
 
 	// Mark as deleted (trash)
-	err = st.MarkMessageDeletedByGmailID(false, "gmail-msg-123")
+	err := st.MarkMessageDeletedByGmailID(false, "gmail-msg-123")
 	if err != nil {
 		t.Fatalf("MarkMessageDeletedByGmailID(trash) error = %v", err)
 	}
@@ -703,7 +649,8 @@ func TestStore_MarkMessageDeletedByGmailID(t *testing.T) {
 }
 
 func TestStore_GetMessageRaw_NotFound(t *testing.T) {
-	st := testutil.NewTestStore(t)
+
+st := testutil.NewTestStore(t)
 
 	// Try to get raw for non-existent message
 	_, err := st.GetMessageRaw(99999)
@@ -713,12 +660,8 @@ func TestStore_GetMessageRaw_NotFound(t *testing.T) {
 }
 
 func TestStore_UpsertMessage_AllFields(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-all", "Full Thread")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	now := time.Now()
 	msg := &store.Message{
@@ -750,12 +693,8 @@ func TestStore_UpsertMessage_AllFields(t *testing.T) {
 }
 
 func TestStore_UpsertMessage_MinimalFields(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-min", "Min Thread")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	// Only required fields, no optional fields
 	msg := &store.Message{
@@ -776,24 +715,14 @@ func TestStore_UpsertMessage_MinimalFields(t *testing.T) {
 }
 
 func TestStore_UpsertMessageRaw_Update(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-raw", "Raw Thread")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
-	msgID, err := st.UpsertMessage(&store.Message{
-		ConversationID:  convID,
-		SourceID:        source.ID,
-		SourceMessageID: "msg-raw-update",
-		MessageType:     "email",
-	})
-	mustNoErr(t, err, "UpsertMessage")
+	msgID := createMessage(t, st, source.ID, convID, "msg-raw-update")
 
 	// Insert raw data
 	rawData1 := []byte("Original raw content")
-	err = st.UpsertMessageRaw(msgID, rawData1)
+	err := st.UpsertMessageRaw(msgID, rawData1)
 	if err != nil {
 		t.Fatalf("UpsertMessageRaw() error = %v", err)
 	}
@@ -807,17 +736,15 @@ func TestStore_UpsertMessageRaw_Update(t *testing.T) {
 
 	// Verify updated data
 	retrieved, err := st.GetMessageRaw(msgID)
-	mustNoErr(t, err, "GetMessageRaw")
+	testutil.MustNoErr(t, err, "GetMessageRaw")
 	if string(retrieved) != string(rawData2) {
 		t.Errorf("retrieved = %q, want %q", retrieved, rawData2)
 	}
 }
 
 func TestStore_MessageExistsBatch_Empty(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
 
 	// Check with empty list
 	result, err := st.MessageExistsBatch(source.ID, []string{})
@@ -830,34 +757,24 @@ func TestStore_MessageExistsBatch_Empty(t *testing.T) {
 }
 
 func TestStore_ReplaceMessageLabels_Empty(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-labels", "Labels Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
-	msgID, err := st.UpsertMessage(&store.Message{
-		ConversationID:  convID,
-		SourceID:        source.ID,
-		SourceMessageID: "msg-labels",
-		MessageType:     "email",
-	})
-	mustNoErr(t, err, "UpsertMessage")
+	msgID := createMessage(t, st, source.ID, convID, "msg-labels")
 
 	lid1, err := st.EnsureLabel(source.ID, "INBOX", "Inbox", "system")
-	mustNoErr(t, err, "EnsureLabel INBOX")
+	testutil.MustNoErr(t, err, "EnsureLabel INBOX")
 	lid2, err := st.EnsureLabel(source.ID, "STARRED", "Starred", "system")
-	mustNoErr(t, err, "EnsureLabel STARRED")
+	testutil.MustNoErr(t, err, "EnsureLabel STARRED")
 
 	// Add labels
 	err = st.ReplaceMessageLabels(msgID, []int64{lid1, lid2})
-	mustNoErr(t, err, "ReplaceMessageLabels")
+	testutil.MustNoErr(t, err, "ReplaceMessageLabels")
 
 	// Verify labels were added
 	var count int
 	err = st.DB().QueryRow(st.Rebind("SELECT COUNT(*) FROM message_labels WHERE message_id = ?"), msgID).Scan(&count)
-	mustNoErr(t, err, "count labels")
+	testutil.MustNoErr(t, err, "count labels")
 	if count != 2 {
 		t.Errorf("label count = %d, want 2", count)
 	}
@@ -870,39 +787,29 @@ func TestStore_ReplaceMessageLabels_Empty(t *testing.T) {
 
 	// Verify all labels were removed
 	err = st.DB().QueryRow(st.Rebind("SELECT COUNT(*) FROM message_labels WHERE message_id = ?"), msgID).Scan(&count)
-	mustNoErr(t, err, "count labels after empty")
+	testutil.MustNoErr(t, err, "count labels after empty")
 	if count != 0 {
 		t.Errorf("label count after empty = %d, want 0", count)
 	}
 }
 
 func TestStore_ReplaceMessageRecipients_Empty(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-recip", "Recipients Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
-	msgID, err := st.UpsertMessage(&store.Message{
-		ConversationID:  convID,
-		SourceID:        source.ID,
-		SourceMessageID: "msg-recip",
-		MessageType:     "email",
-	})
-	mustNoErr(t, err, "UpsertMessage")
+	msgID := createMessage(t, st, source.ID, convID, "msg-recip")
 
 	pid1, err := st.EnsureParticipant("alice@example.com", "Alice", "example.com")
-	mustNoErr(t, err, "EnsureParticipant")
+	testutil.MustNoErr(t, err, "EnsureParticipant")
 
 	// Add recipient
 	err = st.ReplaceMessageRecipients(msgID, "to", []int64{pid1}, []string{"Alice"})
-	mustNoErr(t, err, "ReplaceMessageRecipients")
+	testutil.MustNoErr(t, err, "ReplaceMessageRecipients")
 
 	// Verify recipient was added
 	var count int
 	err = st.DB().QueryRow(st.Rebind("SELECT COUNT(*) FROM message_recipients WHERE message_id = ? AND recipient_type = 'to'"), msgID).Scan(&count)
-	mustNoErr(t, err, "count recipients")
+	testutil.MustNoErr(t, err, "count recipients")
 	if count != 1 {
 		t.Errorf("recipient count = %d, want 1", count)
 	}
@@ -915,17 +822,15 @@ func TestStore_ReplaceMessageRecipients_Empty(t *testing.T) {
 
 	// Verify all recipients were removed
 	err = st.DB().QueryRow(st.Rebind("SELECT COUNT(*) FROM message_recipients WHERE message_id = ? AND recipient_type = 'to'"), msgID).Scan(&count)
-	mustNoErr(t, err, "count recipients after empty")
+	testutil.MustNoErr(t, err, "count recipients after empty")
 	if count != 0 {
 		t.Errorf("recipient count after empty = %d, want 0", count)
 	}
 }
 
 func TestStore_GetActiveSync_NoSync(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
 
 	// No sync started yet
 	active, err := st.GetActiveSync(source.ID)
@@ -938,10 +843,8 @@ func TestStore_GetActiveSync_NoSync(t *testing.T) {
 }
 
 func TestStore_GetLastSuccessfulSync_None(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
+st, source, _ := setupStore(t)
 
 	// No successful sync yet
 	lastSync, err := st.GetLastSuccessfulSync(source.ID)
@@ -954,7 +857,8 @@ func TestStore_GetLastSuccessfulSync_None(t *testing.T) {
 }
 
 func TestStore_GetSourceByIdentifier_NotFound(t *testing.T) {
-	st := testutil.NewTestStore(t)
+
+st := testutil.NewTestStore(t)
 
 	source, err := st.GetSourceByIdentifier("nonexistent@example.com")
 	if err != nil {
@@ -966,24 +870,11 @@ func TestStore_GetSourceByIdentifier_NotFound(t *testing.T) {
 }
 
 func TestStore_GetStats_WithData(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-stats", "Stats Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	// Add multiple messages
-	for i := 0; i < 5; i++ {
-		_, err := st.UpsertMessage(&store.Message{
-			ConversationID:  convID,
-			SourceID:        source.ID,
-			SourceMessageID: "msg-" + string(rune('a'+i)),
-			MessageType:     "email",
-			SizeEstimate:    int64(1000 * (i + 1)),
-		})
-		mustNoErr(t, err, "UpsertMessage")
-	}
+	createMessages(t, st, source.ID, convID, 5)
 
 	stats, err := st.GetStats()
 	if err != nil {
@@ -999,12 +890,8 @@ func TestStore_GetStats_WithData(t *testing.T) {
 }
 
 func TestStore_CountMessagesForSource(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-count", "Count Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	// Initially zero
 	count, err := st.CountMessagesForSource(source.ID)
@@ -1016,15 +903,7 @@ func TestStore_CountMessagesForSource(t *testing.T) {
 	}
 
 	// Add messages
-	for i := 0; i < 3; i++ {
-		_, err := st.UpsertMessage(&store.Message{
-			ConversationID:  convID,
-			SourceID:        source.ID,
-			SourceMessageID: "count-msg-" + string(rune('a'+i)),
-			MessageType:     "email",
-		})
-		mustNoErr(t, err, "UpsertMessage")
-	}
+	createMessages(t, st, source.ID, convID, 3)
 
 	count, err = st.CountMessagesForSource(source.ID)
 	if err != nil {
@@ -1035,8 +914,8 @@ func TestStore_CountMessagesForSource(t *testing.T) {
 	}
 
 	// Mark one as deleted - should not be counted
-	err = st.MarkMessageDeleted(source.ID, "count-msg-a")
-	mustNoErr(t, err, "MarkMessageDeleted")
+	err = st.MarkMessageDeleted(source.ID, "msg-0")
+	testutil.MustNoErr(t, err, "MarkMessageDeleted")
 
 	count, err = st.CountMessagesForSource(source.ID)
 	if err != nil {
@@ -1048,12 +927,8 @@ func TestStore_CountMessagesForSource(t *testing.T) {
 }
 
 func TestStore_CountMessagesWithRaw(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-raw-count", "Raw Count Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	// Initially zero
 	count, err := st.CountMessagesWithRaw(source.ID)
@@ -1068,18 +943,12 @@ func TestStore_CountMessagesWithRaw(t *testing.T) {
 	rawData := []byte("From: test@example.com\r\nSubject: Test\r\n\r\nBody")
 
 	for i := 0; i < 4; i++ {
-		msgID, err := st.UpsertMessage(&store.Message{
-			ConversationID:  convID,
-			SourceID:        source.ID,
-			SourceMessageID: "raw-count-msg-" + string(rune('a'+i)),
-			MessageType:     "email",
-		})
-		mustNoErr(t, err, "UpsertMessage")
+		msgID := createMessage(t, st, source.ID, convID, fmt.Sprintf("raw-count-msg-%d", i))
 
 		// Only store raw for first 2 messages
 		if i < 2 {
 			err = st.UpsertMessageRaw(msgID, rawData)
-			mustNoErr(t, err, "UpsertMessageRaw")
+			testutil.MustNoErr(t, err, "UpsertMessageRaw")
 		}
 	}
 
@@ -1093,12 +962,8 @@ func TestStore_CountMessagesWithRaw(t *testing.T) {
 }
 
 func TestStore_GetRandomMessageIDs(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-random", "Random Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	// Empty source
 	ids, err := st.GetRandomMessageIDs(source.ID, 5)
@@ -1111,15 +976,9 @@ func TestStore_GetRandomMessageIDs(t *testing.T) {
 
 	// Add 10 messages
 	allIDs := make(map[int64]bool)
-	for i := 0; i < 10; i++ {
-		msgID, err := st.UpsertMessage(&store.Message{
-			ConversationID:  convID,
-			SourceID:        source.ID,
-			SourceMessageID: "random-msg-" + string(rune('a'+i)),
-			MessageType:     "email",
-		})
-		mustNoErr(t, err, "UpsertMessage")
-		allIDs[msgID] = true
+	createdIDs := createMessages(t, st, source.ID, convID, 10)
+	for _, id := range createdIDs {
+		allIDs[id] = true
 	}
 
 	// Sample fewer than available
@@ -1158,29 +1017,17 @@ func TestStore_GetRandomMessageIDs(t *testing.T) {
 }
 
 func TestStore_GetRandomMessageIDs_ExcludesDeleted(t *testing.T) {
-	st := testutil.NewTestStore(t)
 
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	mustNoErr(t, err, "GetOrCreateSource")
-	convID, err := st.EnsureConversation(source.ID, "thread-random-del", "Random Deleted Test")
-	mustNoErr(t, err, "EnsureConversation")
+st, source, convID := setupStore(t)
 
 	// Add 5 messages
-	for i := 0; i < 5; i++ {
-		_, err := st.UpsertMessage(&store.Message{
-			ConversationID:  convID,
-			SourceID:        source.ID,
-			SourceMessageID: "random-del-msg-" + string(rune('a'+i)),
-			MessageType:     "email",
-		})
-		mustNoErr(t, err, "UpsertMessage")
-	}
+	createMessages(t, st, source.ID, convID, 5)
 
 	// Delete 2 messages
-	err = st.MarkMessageDeleted(source.ID, "random-del-msg-a")
-	mustNoErr(t, err, "MarkMessageDeleted a")
-	err = st.MarkMessageDeleted(source.ID, "random-del-msg-c")
-	mustNoErr(t, err, "MarkMessageDeleted c")
+	err := st.MarkMessageDeleted(source.ID, "msg-0")
+	testutil.MustNoErr(t, err, "MarkMessageDeleted msg-0")
+	err = st.MarkMessageDeleted(source.ID, "msg-2")
+	testutil.MustNoErr(t, err, "MarkMessageDeleted msg-2")
 
 	// Should only return 3 (non-deleted) messages
 	ids, err := st.GetRandomMessageIDs(source.ID, 10)
