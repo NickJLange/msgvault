@@ -7,7 +7,7 @@ import (
 // SearchState encapsulates search-related state.
 type SearchState struct {
 	Query       string
-	Mode        SearchMode
+	Mode        searchModeKind
 	Filter      query.MessageFilter // Context filter applied to search
 	TotalCount  int64               // Total matching messages
 	Offset      int                 // Current offset for pagination

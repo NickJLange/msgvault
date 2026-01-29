@@ -1435,8 +1435,8 @@ func TestSearchModalOpen(t *testing.T) {
 	if !model.inlineSearchActive {
 		t.Error("expected inlineSearchActive = true")
 	}
-	if model.searchMode != SearchModeFast {
-		t.Errorf("expected SearchModeFast, got %v", model.searchMode)
+	if model.searchMode != searchModeFast {
+		t.Errorf("expected searchModeFast, got %v", model.searchMode)
 	}
 	// Should return a command for textinput blink
 	if cmd == nil {
@@ -1452,7 +1452,7 @@ func TestSearchResultsDisplay(t *testing.T) {
 	model.width = 100
 	model.height = 20
 	model.searchQuery = "test query"
-	model.searchMode = SearchModeFast
+	model.searchMode = searchModeFast
 	model.searchRequestID = 1
 
 	// Simulate receiving search results
@@ -1504,16 +1504,6 @@ func TestSearchResultsStale(t *testing.T) {
 	}
 }
 
-// TestSearchModeString verifies SearchMode.String().
-func TestSearchModeString(t *testing.T) {
-	if SearchModeFast.String() != "Fast" {
-		t.Errorf("expected 'Fast', got %q", SearchModeFast.String())
-	}
-	if SearchModeDeep.String() != "Deep" {
-		t.Errorf("expected 'Deep', got %q", SearchModeDeep.String())
-	}
-}
-
 // TestInlineSearchTabToggleAtMessageList verifies Tab toggles mode and triggers search at message list level.
 func TestInlineSearchTabToggleAtMessageList(t *testing.T) {
 	engine := &mockEngine{}
@@ -1523,7 +1513,7 @@ func TestInlineSearchTabToggleAtMessageList(t *testing.T) {
 	model.height = 20
 	model.level = levelMessageList
 	model.inlineSearchActive = true
-	model.searchMode = SearchModeFast
+	model.searchMode = searchModeFast
 	model.searchInput.SetValue("test query")
 	model.messages = []query.MessageSummary{{ID: 1, Subject: "Existing"}} // Simulate existing results
 
@@ -1532,8 +1522,8 @@ func TestInlineSearchTabToggleAtMessageList(t *testing.T) {
 	m := newModel.(Model)
 
 	// Mode should toggle to Deep
-	if m.searchMode != SearchModeDeep {
-		t.Errorf("expected SearchModeDeep after Tab, got %v", m.searchMode)
+	if m.searchMode != searchModeDeep {
+		t.Errorf("expected searchModeDeep after Tab, got %v", m.searchMode)
 	}
 
 	// Should set loading state
@@ -1564,7 +1554,7 @@ func TestInlineSearchTabToggleNoQueryNoSearch(t *testing.T) {
 	model.height = 20
 	model.level = levelMessageList
 	model.inlineSearchActive = true
-	model.searchMode = SearchModeFast
+	model.searchMode = searchModeFast
 	model.loading = false // Explicitly set to false (New() sets it to true)
 	model.searchInput.SetValue("") // Empty query
 
@@ -1573,8 +1563,8 @@ func TestInlineSearchTabToggleNoQueryNoSearch(t *testing.T) {
 	m := newModel.(Model)
 
 	// Mode should still toggle
-	if m.searchMode != SearchModeDeep {
-		t.Errorf("expected SearchModeDeep after Tab, got %v", m.searchMode)
+	if m.searchMode != searchModeDeep {
+		t.Errorf("expected searchModeDeep after Tab, got %v", m.searchMode)
 	}
 
 	// Should NOT set loading state (no query to search)
@@ -1597,7 +1587,7 @@ func TestInlineSearchTabAtAggregateLevel(t *testing.T) {
 	model.height = 20
 	model.level = levelAggregates // Not message list
 	model.inlineSearchActive = true
-	model.searchMode = SearchModeFast
+	model.searchMode = searchModeFast
 	model.searchInput.SetValue("test query")
 
 	// Press Tab - should do nothing at aggregate level
@@ -1605,8 +1595,8 @@ func TestInlineSearchTabAtAggregateLevel(t *testing.T) {
 	m := newModel.(Model)
 
 	// Mode should NOT toggle (Tab disabled at aggregate level)
-	if m.searchMode != SearchModeFast {
-		t.Errorf("expected SearchModeFast unchanged at aggregate level, got %v", m.searchMode)
+	if m.searchMode != searchModeFast {
+		t.Errorf("expected searchModeFast unchanged at aggregate level, got %v", m.searchMode)
 	}
 
 	// Should NOT trigger any command
@@ -1624,7 +1614,7 @@ func TestInlineSearchTabToggleBackToFast(t *testing.T) {
 	model.height = 20
 	model.level = levelMessageList
 	model.inlineSearchActive = true
-	model.searchMode = SearchModeDeep // Start in Deep mode
+	model.searchMode = searchModeDeep // Start in Deep mode
 	model.searchInput.SetValue("test query")
 
 	// Press Tab to toggle back to Fast mode
@@ -1632,8 +1622,8 @@ func TestInlineSearchTabToggleBackToFast(t *testing.T) {
 	m := newModel.(Model)
 
 	// Mode should toggle back to Fast
-	if m.searchMode != SearchModeFast {
-		t.Errorf("expected SearchModeFast after Tab from Deep, got %v", m.searchMode)
+	if m.searchMode != searchModeFast {
+		t.Errorf("expected searchModeFast after Tab from Deep, got %v", m.searchMode)
 	}
 
 	// Should trigger a search command

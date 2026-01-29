@@ -41,25 +41,13 @@ const (
 	modalHelp
 )
 
-// SearchMode represents the search mode (fast metadata vs deep body search).
-type SearchMode int
+// searchModeKind represents the search mode (fast metadata vs deep body search).
+type searchModeKind int
 
 const (
-	SearchModeFast SearchMode = iota // Parquet metadata only (subject, sender, recipient)
-	SearchModeDeep                   // SQLite FTS5 (includes body text)
+	searchModeFast searchModeKind = iota // Parquet metadata only (subject, sender, recipient)
+	searchModeDeep                       // SQLite FTS5 (includes body text)
 )
-
-// String returns a human-readable name for the search mode.
-func (m SearchMode) String() string {
-	switch m {
-	case SearchModeFast:
-		return "Fast"
-	case SearchModeDeep:
-		return "Deep"
-	default:
-		return "Fast"
-	}
-}
 
 // selectionState tracks selected items for batch operations.
 type selectionState struct {
@@ -129,7 +117,7 @@ type Model struct {
 	searchRequestID      uint64 // Current request ID for search results
 	
 	// Search state
-	searchMode        SearchMode          // Fast (Parquet) or Deep (FTS5)
+	searchMode        searchModeKind      // Fast (Parquet) or Deep (FTS5)
 	searchInput       textinput.Model     // Text input for search query
 	searchTotalCount  int64               // Total matching messages (for pagination display)
 	searchOffset      int                 // Current offset for pagination
@@ -189,7 +177,7 @@ func New(engine query.Engine, opts Options) Model {
 			MessageIDs:        make(map[int64]bool),
 		},
 		searchInput: ti,
-		searchMode:  SearchModeFast,
+		searchMode:  searchModeFast,
 	}
 }
 
@@ -394,7 +382,7 @@ func (m Model) loadSearchWithOffset(queryStr string, offset int, appendResults b
 		var totalCount int64
 		var err error
 
-		if m.searchMode == SearchModeFast {
+		if m.searchMode == searchModeFast {
 			// Fast search: Parquet metadata only
 			results, err = m.engine.SearchFast(ctx, q, m.searchFilter, searchPageSize, offset)
 			if err == nil {

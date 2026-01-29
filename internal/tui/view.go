@@ -632,7 +632,7 @@ func (m Model) messageListView() string {
 	isLoading := m.loading || m.inlineSearchLoading || m.searchLoadingMore
 	if m.inlineSearchActive {
 		modeTag := "[Fast]"
-		if m.searchMode == SearchModeDeep {
+		if m.searchMode == searchModeDeep {
 			modeTag = "[Deep]"
 		}
 		infoContent = modeTag + "/" + m.searchInput.View()
@@ -643,7 +643,7 @@ func (m Model) messageListView() string {
 		} else if m.searchTotalCount == -1 {
 			infoContent += fmt.Sprintf(" (%d+ results, PgDn for more)", len(m.messages))
 		}
-		if m.searchMode == SearchModeDeep {
+		if m.searchMode == searchModeDeep {
 			infoContent += " [Deep]"
 		}
 	}

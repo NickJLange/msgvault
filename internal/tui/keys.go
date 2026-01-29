@@ -65,11 +65,11 @@ func (m Model) handleInlineSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.level != levelMessageList {
 			return m, nil // Tab has no effect at aggregate levels
 		}
-		if m.searchMode == SearchModeFast {
-			m.searchMode = SearchModeDeep
+		if m.searchMode == searchModeFast {
+			m.searchMode = searchModeDeep
 			m.searchInput.Placeholder = "search (Tab: fast)"
 		} else {
-			m.searchMode = SearchModeFast
+			m.searchMode = searchModeFast
 			m.searchInput.Placeholder = "search (Tab: deep)"
 		}
 		// Invalidate any pending debounce timers from old mode
@@ -98,7 +98,7 @@ func (m Model) handleInlineSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		debounceID := m.inlineSearchDebounce
 
 		delay := inlineSearchDebounceDelay
-		if m.searchMode == SearchModeDeep {
+		if m.searchMode == searchModeDeep {
 			delay = deepSearchDebounceDelay
 		}
 
@@ -388,7 +388,7 @@ func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Check if we need to load more deep search results after pgdown
 	key := msg.String()
 	if (key == "pgdown" || key == "ctrl+d") &&
-		m.searchQuery != "" && m.searchMode == SearchModeDeep &&
+		m.searchQuery != "" && m.searchMode == searchModeDeep &&
 		m.searchTotalCount == -1 && !m.searchLoadingMore && !m.loading &&
 		m.cursor >= len(m.messages)-1 && len(m.messages) > 0 {
 		m.searchLoadingMore = true
@@ -612,7 +612,7 @@ func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // maybeLoadMoreSearchResults checks if we're near the end of search results and should load more.
 func (m *Model) maybeLoadMoreSearchResults() tea.Cmd {
 	// Only paginate search results in fast mode
-	if m.searchQuery == "" || m.searchMode != SearchModeFast {
+	if m.searchQuery == "" || m.searchMode != searchModeFast {
 		return nil
 	}
 
@@ -1045,7 +1045,7 @@ func (m *Model) openAttachmentFilter() {
 
 func (m *Model) activateInlineSearch(placeholder string) tea.Cmd {
 	m.inlineSearchActive = true
-	m.searchMode = SearchModeFast
+	m.searchMode = searchModeFast
 	m.searchInput.Placeholder = placeholder
 	m.searchInput.SetValue("") // Clear previous search
 	m.searchInput.Focus()
