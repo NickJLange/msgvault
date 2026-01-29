@@ -163,6 +163,14 @@ func (c *ExecutorTestContext) AssertCompleted() {
 	}
 }
 
+// AssertNotCompleted verifies that OnComplete was not called.
+func (c *ExecutorTestContext) AssertNotCompleted() {
+	c.t.Helper()
+	if c.Progress.completed {
+		c.t.Error("OnComplete was called unexpectedly")
+	}
+}
+
 // AssertTrashCalls verifies the number of TrashMessage calls.
 func (c *ExecutorTestContext) AssertTrashCalls(want int) {
 	c.t.Helper()
@@ -369,26 +377,28 @@ func TestExecutor_Execute_AllFail(t *testing.T) {
 }
 
 func TestExecutor_Execute_ContextCancelled(t *testing.T) {
-	tc := NewExecutorTestContext(t)
+	ctx := NewExecutorTestContext(t)
 
 	// Create manifest with many messages
 	gmailIDs := make([]string, 100)
 	for i := range gmailIDs {
 		gmailIDs[i] = fmt.Sprintf("msg%d", i)
 	}
-	manifest := tc.CreateManifest("interrupt test", gmailIDs)
+	manifest := ctx.CreateManifest("interrupt test", gmailIDs)
 
 	// Cancel context immediately
-	ctx, cancel := context.WithCancel(context.Background())
+	execCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := tc.Exec.Execute(ctx, manifest.ID, nil)
+	err := ctx.Exec.Execute(execCtx, manifest.ID, nil)
 	if err != context.Canceled {
 		t.Errorf("Execute() error = %v, want context.Canceled", err)
 	}
 
+	ctx.AssertNotCompleted()
+
 	// Manifest should remain in in_progress (for resume)
-	inProgress, err := tc.Mgr.ListInProgress()
+	inProgress, err := ctx.Mgr.ListInProgress()
 	if err != nil {
 		t.Fatalf("ListInProgress() error = %v", err)
 	}
@@ -563,23 +573,25 @@ func TestExecutor_ExecuteBatch_InvalidStatus(t *testing.T) {
 }
 
 func TestExecutor_ExecuteBatch_ContextCancelled(t *testing.T) {
-	tc := NewExecutorTestContext(t)
+	ctx := NewExecutorTestContext(t)
 
 	// Create manifest with many messages
 	gmailIDs := make([]string, 2500)
 	for i := range gmailIDs {
 		gmailIDs[i] = fmt.Sprintf("msg%d", i)
 	}
-	manifest := tc.CreateManifest("cancel batch", gmailIDs)
+	manifest := ctx.CreateManifest("cancel batch", gmailIDs)
 
 	// Cancel context immediately
-	ctx, cancel := context.WithCancel(context.Background())
+	execCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := tc.Exec.ExecuteBatch(ctx, manifest.ID)
+	err := ctx.Exec.ExecuteBatch(execCtx, manifest.ID)
 	if err != context.Canceled {
 		t.Errorf("ExecuteBatch() error = %v, want context.Canceled", err)
 	}
+
+	ctx.AssertNotCompleted()
 }
 
 func TestExecutor_ExecuteBatch_ManifestNotFound(t *testing.T) {
