@@ -144,6 +144,16 @@ func ReadFile(t *testing.T, path string) []byte {
 	return content
 }
 
+// AssertFileContent reads the file at path and asserts its content matches expected.
+func AssertFileContent(t *testing.T, path string, expected string) {
+	t.Helper()
+
+	content := ReadFile(t, path)
+	if string(content) != expected {
+		t.Errorf("file content mismatch\nexpected: %q\ngot:      %q", expected, content)
+	}
+}
+
 // MustExist fails the test if the path does not exist or cannot be accessed.
 func MustExist(t *testing.T, path string) {
 	t.Helper()

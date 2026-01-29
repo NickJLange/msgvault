@@ -44,10 +44,7 @@ func TestWriteAndReadFile(t *testing.T) {
 	MustExist(t, path)
 
 	// Verify content
-	read := ReadFile(t, path)
-	if string(read) != string(content) {
-		t.Errorf("expected %q, got %q", content, read)
-	}
+	AssertFileContent(t, path, string(content))
 }
 
 func TestWriteFileSubdir(t *testing.T) {
@@ -76,7 +73,7 @@ func TestMustNotExist(t *testing.T) {
 	MustNotExist(t, filepath.Join(dir, "does-not-exist.txt"))
 }
 
-func TestValidateRelativePathRejectsAbsolutePath(t *testing.T) {
+func TestValidateRelativePath(t *testing.T) {
 	dir := TempDir(t)
 
 	// Use filepath.Abs to get a platform-appropriate absolute path
@@ -85,58 +82,68 @@ func TestValidateRelativePathRejectsAbsolutePath(t *testing.T) {
 		t.Fatalf("failed to get absolute path: %v", err)
 	}
 
-	err = validateRelativePath(dir, absPath)
-	if err == nil {
-		t.Errorf("expected error for absolute path: %s", absPath)
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{
+			name:    "absolute path",
+			path:    absPath,
+			wantErr: true,
+		},
+		{
+			name:    "rooted path",
+			path:    string(filepath.Separator) + "rooted" + string(filepath.Separator) + "path.txt",
+			wantErr: true,
+		},
+		{
+			name:    "escape dot dot",
+			path:    "../escape.txt",
+			wantErr: true,
+		},
+		{
+			name:    "escape dot dot nested",
+			path:    "subdir/../../escape.txt",
+			wantErr: true,
+		},
+		{
+			name:    "escape just dot dot",
+			path:    "..",
+			wantErr: true,
+		},
+		{
+			name:    "valid simple",
+			path:    "simple.txt",
+			wantErr: false,
+		},
+		{
+			name:    "valid subdir",
+			path:    "subdir/file.txt",
+			wantErr: false,
+		},
+		{
+			name:    "valid deep",
+			path:    "a/b/c/deep.txt",
+			wantErr: false,
+		},
+		{
+			name:    "valid with dots",
+			path:    "file-with-dots.test.txt",
+			wantErr: false,
+		},
+		{
+			name:    "valid current dir",
+			path:    "./current.txt",
+			wantErr: false,
+		},
 	}
-}
 
-func TestValidateRelativePathRejectsRootedPaths(t *testing.T) {
-	dir := TempDir(t)
-
-	// Test rooted path (starts with separator)
-	rootedPath := string(filepath.Separator) + "rooted" + string(filepath.Separator) + "path.txt"
-	err := validateRelativePath(dir, rootedPath)
-	if err == nil {
-		t.Errorf("expected error for rooted path: %s", rootedPath)
-	}
-}
-
-func TestValidateRelativePathRejectsDotDotEscape(t *testing.T) {
-	dir := TempDir(t)
-
-	testCases := []string{
-		"../escape.txt",
-		"subdir/../../escape.txt",
-		"..",
-	}
-
-	for _, name := range testCases {
-		t.Run(name, func(t *testing.T) {
-			err := validateRelativePath(dir, name)
-			if err == nil {
-				t.Errorf("expected error for path: %s", name)
-			}
-		})
-	}
-}
-
-func TestValidateRelativePathAllowsValidPaths(t *testing.T) {
-	dir := TempDir(t)
-
-	validPaths := []string{
-		"simple.txt",
-		"subdir/file.txt",
-		"a/b/c/deep.txt",
-		"file-with-dots.test.txt",
-		"./current.txt",
-	}
-
-	for _, name := range validPaths {
-		t.Run(name, func(t *testing.T) {
-			err := validateRelativePath(dir, name)
-			if err != nil {
-				t.Errorf("unexpected error for path %s: %v", name, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRelativePath(dir, tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateRelativePath() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
