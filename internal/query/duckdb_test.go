@@ -2,9 +2,6 @@ package query
 
 import (
 	"context"
-	"database/sql"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -21,198 +18,69 @@ import (
 func setupTestParquet(t *testing.T) (string, func()) {
 	t.Helper()
 
-	// Create temp directory
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-parquet-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-
-	// Create all required directories
-	dirs := []string{
-		filepath.Join(tmpDir, "messages", "year=2024"),
-		filepath.Join(tmpDir, "sources"),
-		filepath.Join(tmpDir, "participants"),
-		filepath.Join(tmpDir, "message_recipients"),
-		filepath.Join(tmpDir, "labels"),
-		filepath.Join(tmpDir, "message_labels"),
-		filepath.Join(tmpDir, "attachments"),
-	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			os.RemoveAll(tmpDir)
-			t.Fatalf("create dir %s: %v", dir, err)
-		}
-	}
-
-	// Use DuckDB to create test Parquet files
-	db, err := sql.Open("duckdb", "")
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("open duckdb: %v", err)
-	}
-	defer db.Close()
-
-	escapePath := func(p string) string {
-		return strings.ReplaceAll(filepath.ToSlash(p), "'", "''")
-	}
-
-	// 1. Create messages Parquet
-	messagesPath := escapePath(filepath.Join(tmpDir, "messages", "year=2024", "data.parquet"))
-	messagesSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				-- id, source_id, source_message_id, conversation_id, subject, snippet, sent_at, size_estimate, has_attachments, deleted_from_source_at, year, month
-				(1::BIGINT, 1::BIGINT, 'msg1', 101::BIGINT, 'Hello World', 'Preview 1', TIMESTAMP '2024-01-15 10:00:00', 1000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
-				(2::BIGINT, 1::BIGINT, 'msg2', 101::BIGINT, 'Re: Hello', 'Preview 2', TIMESTAMP '2024-01-16 11:00:00', 2000::BIGINT, true, NULL::TIMESTAMP, 2024, 1),
-				(3::BIGINT, 1::BIGINT, 'msg3', 102::BIGINT, 'Follow up', 'Preview 3', TIMESTAMP '2024-02-01 09:00:00', 1500::BIGINT, false, NULL::TIMESTAMP, 2024, 2),
-				(4::BIGINT, 1::BIGINT, 'msg4', 103::BIGINT, 'Question', 'Preview 4', TIMESTAMP '2024-02-15 14:00:00', 3000::BIGINT, true, NULL::TIMESTAMP, 2024, 2),
-				(5::BIGINT, 1::BIGINT, 'msg5', 104::BIGINT, 'Final', 'Preview 5', TIMESTAMP '2024-03-01 16:00:00', 500::BIGINT, false, NULL::TIMESTAMP, 2024, 3)
-			) AS t(id, source_id, source_message_id, conversation_id, subject, snippet, sent_at, size_estimate, has_attachments, deleted_from_source_at, year, month)
-		) TO '` + messagesPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(messagesSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create messages parquet: %v", err)
-	}
-
-	// 2. Create sources Parquet
-	sourcesPath := escapePath(filepath.Join(tmpDir, "sources", "sources.parquet"))
-	sourcesSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(1::BIGINT, 'test@gmail.com')
-			) AS t(id, account_email)
-		) TO '` + sourcesPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(sourcesSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create sources parquet: %v", err)
-	}
-
-	// 3. Create participants Parquet
-	// IDs: 1=alice, 2=bob, 3=carol, 4=dan
-	participantsPath := escapePath(filepath.Join(tmpDir, "participants", "participants.parquet"))
-	participantsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(1::BIGINT, 'alice@example.com', 'example.com', 'Alice'),
-				(2::BIGINT, 'bob@company.org', 'company.org', 'Bob'),
-				(3::BIGINT, 'carol@example.com', 'example.com', 'Carol'),
-				(4::BIGINT, 'dan@other.net', 'other.net', 'Dan')
-			) AS t(id, email_address, domain, display_name)
-		) TO '` + participantsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(participantsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create participants parquet: %v", err)
-	}
-
-	// 4. Create message_recipients Parquet
-	// msg1: from alice, to bob+carol
-	// msg2: from alice, to bob, cc dan
-	// msg3: from alice, to bob
-	// msg4: from bob, to alice
-	// msg5: from bob, to alice
-	recipientsPath := escapePath(filepath.Join(tmpDir, "message_recipients", "message_recipients.parquet"))
-	recipientsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				-- msg1: from alice, to bob+carol
-				(1::BIGINT, 1::BIGINT, 'from', 'Alice'),
-				(1::BIGINT, 2::BIGINT, 'to', 'Bob'),
-				(1::BIGINT, 3::BIGINT, 'to', 'Carol'),
-				-- msg2: from alice, to bob, cc dan
-				(2::BIGINT, 1::BIGINT, 'from', 'Alice'),
-				(2::BIGINT, 2::BIGINT, 'to', 'Bob'),
-				(2::BIGINT, 4::BIGINT, 'cc', 'Dan'),
-				-- msg3: from alice, to bob
-				(3::BIGINT, 1::BIGINT, 'from', 'Alice'),
-				(3::BIGINT, 2::BIGINT, 'to', 'Bob'),
-				-- msg4: from bob, to alice
-				(4::BIGINT, 2::BIGINT, 'from', 'Bob'),
-				(4::BIGINT, 1::BIGINT, 'to', 'Alice'),
-				-- msg5: from bob, to alice
-				(5::BIGINT, 2::BIGINT, 'from', 'Bob'),
-				(5::BIGINT, 1::BIGINT, 'to', 'Alice')
-			) AS t(message_id, participant_id, recipient_type, display_name)
-		) TO '` + recipientsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(recipientsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create message_recipients parquet: %v", err)
-	}
-
-	// 5. Create labels Parquet
-	// IDs: 1=INBOX, 2=Work, 3=IMPORTANT
-	labelsPath := escapePath(filepath.Join(tmpDir, "labels", "labels.parquet"))
-	labelsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(1::BIGINT, 'INBOX'),
-				(2::BIGINT, 'Work'),
-				(3::BIGINT, 'IMPORTANT')
-			) AS t(id, name)
-		) TO '` + labelsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(labelsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create labels parquet: %v", err)
-	}
-
-	// 6. Create message_labels Parquet
-	// msg1: INBOX, Work
-	// msg2: INBOX, IMPORTANT
-	// msg3: INBOX
-	// msg4: INBOX, Work
-	// msg5: INBOX
-	messageLabelsPath := escapePath(filepath.Join(tmpDir, "message_labels", "message_labels.parquet"))
-	messageLabelsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				-- msg1: INBOX, Work
-				(1::BIGINT, 1::BIGINT),
-				(1::BIGINT, 2::BIGINT),
-				-- msg2: INBOX, IMPORTANT
-				(2::BIGINT, 1::BIGINT),
-				(2::BIGINT, 3::BIGINT),
-				-- msg3: INBOX
-				(3::BIGINT, 1::BIGINT),
-				-- msg4: INBOX, Work
-				(4::BIGINT, 1::BIGINT),
-				(4::BIGINT, 2::BIGINT),
-				-- msg5: INBOX
-				(5::BIGINT, 1::BIGINT)
-			) AS t(message_id, label_id)
-		) TO '` + messageLabelsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(messageLabelsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create message_labels parquet: %v", err)
-	}
-
-	// 7. Create attachments Parquet
-	// msg2: 2 attachments (10000 + 5000 = 15000)
-	// msg4: 1 attachment (20000)
-	attachmentsPath := escapePath(filepath.Join(tmpDir, "attachments", "attachments.parquet"))
-	attachmentsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(2::BIGINT, 10000::BIGINT, 'document.pdf'),
-				(2::BIGINT, 5000::BIGINT, 'image.png'),
-				(4::BIGINT, 20000::BIGINT, 'report.xlsx')
-			) AS t(message_id, size, filename)
-		) TO '` + attachmentsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(attachmentsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create attachments parquet: %v", err)
-	}
-
-	cleanup := func() {
-		os.RemoveAll(tmpDir)
-	}
-
-	return tmpDir, cleanup
+	return newParquetBuilder(t).
+		addTable("messages", "messages/year=2024", "data.parquet", messagesCols, `
+			-- id, source_id, source_message_id, conversation_id, subject, snippet, sent_at, size_estimate, has_attachments, deleted_from_source_at, year, month
+			(1::BIGINT, 1::BIGINT, 'msg1', 101::BIGINT, 'Hello World', 'Preview 1', TIMESTAMP '2024-01-15 10:00:00', 1000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
+			(2::BIGINT, 1::BIGINT, 'msg2', 101::BIGINT, 'Re: Hello', 'Preview 2', TIMESTAMP '2024-01-16 11:00:00', 2000::BIGINT, true, NULL::TIMESTAMP, 2024, 1),
+			(3::BIGINT, 1::BIGINT, 'msg3', 102::BIGINT, 'Follow up', 'Preview 3', TIMESTAMP '2024-02-01 09:00:00', 1500::BIGINT, false, NULL::TIMESTAMP, 2024, 2),
+			(4::BIGINT, 1::BIGINT, 'msg4', 103::BIGINT, 'Question', 'Preview 4', TIMESTAMP '2024-02-15 14:00:00', 3000::BIGINT, true, NULL::TIMESTAMP, 2024, 2),
+			(5::BIGINT, 1::BIGINT, 'msg5', 104::BIGINT, 'Final', 'Preview 5', TIMESTAMP '2024-03-01 16:00:00', 500::BIGINT, false, NULL::TIMESTAMP, 2024, 3)
+		`).
+		addTable("sources", "sources", "sources.parquet", sourcesCols, `
+			(1::BIGINT, 'test@gmail.com')
+		`).
+		addTable("participants", "participants", "participants.parquet", participantsCols, `
+			(1::BIGINT, 'alice@example.com', 'example.com', 'Alice'),
+			(2::BIGINT, 'bob@company.org', 'company.org', 'Bob'),
+			(3::BIGINT, 'carol@example.com', 'example.com', 'Carol'),
+			(4::BIGINT, 'dan@other.net', 'other.net', 'Dan')
+		`).
+		addTable("message_recipients", "message_recipients", "message_recipients.parquet", messageRecipientsCols, `
+			-- msg1: from alice, to bob+carol
+			(1::BIGINT, 1::BIGINT, 'from', 'Alice'),
+			(1::BIGINT, 2::BIGINT, 'to', 'Bob'),
+			(1::BIGINT, 3::BIGINT, 'to', 'Carol'),
+			-- msg2: from alice, to bob, cc dan
+			(2::BIGINT, 1::BIGINT, 'from', 'Alice'),
+			(2::BIGINT, 2::BIGINT, 'to', 'Bob'),
+			(2::BIGINT, 4::BIGINT, 'cc', 'Dan'),
+			-- msg3: from alice, to bob
+			(3::BIGINT, 1::BIGINT, 'from', 'Alice'),
+			(3::BIGINT, 2::BIGINT, 'to', 'Bob'),
+			-- msg4: from bob, to alice
+			(4::BIGINT, 2::BIGINT, 'from', 'Bob'),
+			(4::BIGINT, 1::BIGINT, 'to', 'Alice'),
+			-- msg5: from bob, to alice
+			(5::BIGINT, 2::BIGINT, 'from', 'Bob'),
+			(5::BIGINT, 1::BIGINT, 'to', 'Alice')
+		`).
+		addTable("labels", "labels", "labels.parquet", labelsCols, `
+			(1::BIGINT, 'INBOX'),
+			(2::BIGINT, 'Work'),
+			(3::BIGINT, 'IMPORTANT')
+		`).
+		addTable("message_labels", "message_labels", "message_labels.parquet", messageLabelsCols, `
+			-- msg1: INBOX, Work
+			(1::BIGINT, 1::BIGINT),
+			(1::BIGINT, 2::BIGINT),
+			-- msg2: INBOX, IMPORTANT
+			(2::BIGINT, 1::BIGINT),
+			(2::BIGINT, 3::BIGINT),
+			-- msg3: INBOX
+			(3::BIGINT, 1::BIGINT),
+			-- msg4: INBOX, Work
+			(4::BIGINT, 1::BIGINT),
+			(4::BIGINT, 2::BIGINT),
+			-- msg5: INBOX
+			(5::BIGINT, 1::BIGINT)
+		`).
+		addTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `
+			(2::BIGINT, 10000::BIGINT, 'document.pdf'),
+			(2::BIGINT, 5000::BIGINT, 'image.png'),
+			(4::BIGINT, 20000::BIGINT, 'report.xlsx')
+		`).
+		build()
 }
 
 // TestDuckDBEngine_SQLiteEngineReuse verifies that DuckDBEngine reuses a single
@@ -1550,186 +1418,56 @@ func TestDuckDBEngine_GetGmailIDsByFilter(t *testing.T) {
 func setupTestParquetWithEmptyBuckets(t *testing.T) (string, func()) {
 	t.Helper()
 
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-parquet-empty-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-
-	dirs := []string{
-		filepath.Join(tmpDir, "messages", "year=2024"),
-		filepath.Join(tmpDir, "sources"),
-		filepath.Join(tmpDir, "participants"),
-		filepath.Join(tmpDir, "message_recipients"),
-		filepath.Join(tmpDir, "labels"),
-		filepath.Join(tmpDir, "message_labels"),
-		filepath.Join(tmpDir, "attachments"),
-	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			os.RemoveAll(tmpDir)
-			t.Fatalf("create dir %s: %v", dir, err)
-		}
-	}
-
-	db, err := sql.Open("duckdb", "")
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("open duckdb: %v", err)
-	}
-	defer db.Close()
-
-	escapePath := func(p string) string {
-		return strings.ReplaceAll(filepath.ToSlash(p), "'", "''")
-	}
-
-	// Messages:
-	// 1: normal (alice->bob, INBOX label)
-	// 2: normal (bob->alice, Work label)
-	// 3: no sender (only to recipient, no 'from' entry)
-	// 4: no recipients (only 'from' entry, no to/cc)
-	// 5: no labels
-	// 6: sender with empty domain
-	messagesPath := escapePath(filepath.Join(tmpDir, "messages", "year=2024", "data.parquet"))
-	messagesSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(1::BIGINT, 1::BIGINT, 'msg1', 101::BIGINT, 'Normal 1', 'Preview 1', TIMESTAMP '2024-01-15 10:00:00', 1000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
-				(2::BIGINT, 1::BIGINT, 'msg2', 102::BIGINT, 'Normal 2', 'Preview 2', TIMESTAMP '2024-01-16 11:00:00', 2000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
-				(3::BIGINT, 1::BIGINT, 'msg3', 103::BIGINT, 'No Sender', 'Preview 3', TIMESTAMP '2024-01-17 09:00:00', 1500::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
-				(4::BIGINT, 1::BIGINT, 'msg4', 104::BIGINT, 'No Recipients', 'Preview 4', TIMESTAMP '2024-01-18 14:00:00', 3000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
-				(5::BIGINT, 1::BIGINT, 'msg5', 105::BIGINT, 'No Labels', 'Preview 5', TIMESTAMP '2024-01-19 16:00:00', 500::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
-				(6::BIGINT, 1::BIGINT, 'msg6', 106::BIGINT, 'Empty Domain', 'Preview 6', TIMESTAMP '2024-01-20 16:00:00', 600::BIGINT, false, NULL::TIMESTAMP, 2024, 1)
-			) AS t(id, source_id, source_message_id, conversation_id, subject, snippet, sent_at, size_estimate, has_attachments, deleted_from_source_at, year, month)
-		) TO '` + messagesPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(messagesSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create messages parquet: %v", err)
-	}
-
-	sourcesPath := escapePath(filepath.Join(tmpDir, "sources", "sources.parquet"))
-	sourcesSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(1::BIGINT, 'test@gmail.com')
-			) AS t(id, account_email)
-		) TO '` + sourcesPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(sourcesSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create sources parquet: %v", err)
-	}
-
-	// Participants: 1=alice, 2=bob, 3=nodomain (empty domain)
-	participantsPath := escapePath(filepath.Join(tmpDir, "participants", "participants.parquet"))
-	participantsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(1::BIGINT, 'alice@example.com', 'example.com', 'Alice'),
-				(2::BIGINT, 'bob@company.org', 'company.org', 'Bob'),
-				(3::BIGINT, 'nodomain', '', 'No Domain')
-			) AS t(id, email_address, domain, display_name)
-		) TO '` + participantsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(participantsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create participants parquet: %v", err)
-	}
-
-	// Message recipients:
-	// msg1: from alice, to bob
-	// msg2: from bob, to alice
-	// msg3: to bob only (no 'from' - tests MatchEmptySender)
-	// msg4: from alice only (no to/cc - tests MatchEmptyRecipient)
-	// msg5: from alice, to bob (has sender/recipient but no labels)
-	// msg6: from nodomain, to bob (tests MatchEmptyDomain)
-	recipientsPath := escapePath(filepath.Join(tmpDir, "message_recipients", "message_recipients.parquet"))
-	recipientsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				-- msg1: from alice, to bob
-				(1::BIGINT, 1::BIGINT, 'from', 'Alice'),
-				(1::BIGINT, 2::BIGINT, 'to', 'Bob'),
-				-- msg2: from bob, to alice
-				(2::BIGINT, 2::BIGINT, 'from', 'Bob'),
-				(2::BIGINT, 1::BIGINT, 'to', 'Alice'),
-				-- msg3: to bob only (no sender)
-				(3::BIGINT, 2::BIGINT, 'to', 'Bob'),
-				-- msg4: from alice only (no recipients)
-				(4::BIGINT, 1::BIGINT, 'from', 'Alice'),
-				-- msg5: from alice, to bob (normal, but no labels)
-				(5::BIGINT, 1::BIGINT, 'from', 'Alice'),
-				(5::BIGINT, 2::BIGINT, 'to', 'Bob'),
-				-- msg6: from nodomain, to bob (empty domain sender)
-				(6::BIGINT, 3::BIGINT, 'from', 'No Domain'),
-				(6::BIGINT, 2::BIGINT, 'to', 'Bob')
-			) AS t(message_id, participant_id, recipient_type, display_name)
-		) TO '` + recipientsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(recipientsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create message_recipients parquet: %v", err)
-	}
-
-	// Labels: 1=INBOX, 2=Work
-	labelsPath := escapePath(filepath.Join(tmpDir, "labels", "labels.parquet"))
-	labelsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(1::BIGINT, 'INBOX'),
-				(2::BIGINT, 'Work')
-			) AS t(id, name)
-		) TO '` + labelsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(labelsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create labels parquet: %v", err)
-	}
-
-	// Message labels:
-	// msg1: INBOX
-	// msg2: Work
-	// msg3: INBOX
-	// msg4: INBOX
-	// msg5: (no labels - tests MatchEmptyLabel)
-	// msg6: INBOX
-	messageLabelsPath := escapePath(filepath.Join(tmpDir, "message_labels", "message_labels.parquet"))
-	messageLabelsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(1::BIGINT, 1::BIGINT),
-				(2::BIGINT, 2::BIGINT),
-				(3::BIGINT, 1::BIGINT),
-				(4::BIGINT, 1::BIGINT),
-				(6::BIGINT, 1::BIGINT)
-			) AS t(message_id, label_id)
-		) TO '` + messageLabelsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(messageLabelsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create message_labels parquet: %v", err)
-	}
-
-	// Empty attachments file (required for queries)
-	attachmentsPath := escapePath(filepath.Join(tmpDir, "attachments", "attachments.parquet"))
-	attachmentsSQL := `
-		COPY (
-			SELECT * FROM (VALUES
-				(0::BIGINT, 0::BIGINT, '')
-			) AS t(message_id, size, filename)
-			WHERE false
-		) TO '` + attachmentsPath + `' (FORMAT PARQUET)
-	`
-	if _, err := db.Exec(attachmentsSQL); err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("create attachments parquet: %v", err)
-	}
-
-	cleanup := func() {
-		os.RemoveAll(tmpDir)
-	}
-
-	return tmpDir, cleanup
+	return newParquetBuilder(t).
+		addTable("messages", "messages/year=2024", "data.parquet", messagesCols, `
+			(1::BIGINT, 1::BIGINT, 'msg1', 101::BIGINT, 'Normal 1', 'Preview 1', TIMESTAMP '2024-01-15 10:00:00', 1000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
+			(2::BIGINT, 1::BIGINT, 'msg2', 102::BIGINT, 'Normal 2', 'Preview 2', TIMESTAMP '2024-01-16 11:00:00', 2000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
+			(3::BIGINT, 1::BIGINT, 'msg3', 103::BIGINT, 'No Sender', 'Preview 3', TIMESTAMP '2024-01-17 09:00:00', 1500::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
+			(4::BIGINT, 1::BIGINT, 'msg4', 104::BIGINT, 'No Recipients', 'Preview 4', TIMESTAMP '2024-01-18 14:00:00', 3000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
+			(5::BIGINT, 1::BIGINT, 'msg5', 105::BIGINT, 'No Labels', 'Preview 5', TIMESTAMP '2024-01-19 16:00:00', 500::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
+			(6::BIGINT, 1::BIGINT, 'msg6', 106::BIGINT, 'Empty Domain', 'Preview 6', TIMESTAMP '2024-01-20 16:00:00', 600::BIGINT, false, NULL::TIMESTAMP, 2024, 1)
+		`).
+		addTable("sources", "sources", "sources.parquet", sourcesCols, `
+			(1::BIGINT, 'test@gmail.com')
+		`).
+		addTable("participants", "participants", "participants.parquet", participantsCols, `
+			(1::BIGINT, 'alice@example.com', 'example.com', 'Alice'),
+			(2::BIGINT, 'bob@company.org', 'company.org', 'Bob'),
+			(3::BIGINT, 'nodomain', '', 'No Domain')
+		`).
+		addTable("message_recipients", "message_recipients", "message_recipients.parquet", messageRecipientsCols, `
+			-- msg1: from alice, to bob
+			(1::BIGINT, 1::BIGINT, 'from', 'Alice'),
+			(1::BIGINT, 2::BIGINT, 'to', 'Bob'),
+			-- msg2: from bob, to alice
+			(2::BIGINT, 2::BIGINT, 'from', 'Bob'),
+			(2::BIGINT, 1::BIGINT, 'to', 'Alice'),
+			-- msg3: to bob only (no sender)
+			(3::BIGINT, 2::BIGINT, 'to', 'Bob'),
+			-- msg4: from alice only (no recipients)
+			(4::BIGINT, 1::BIGINT, 'from', 'Alice'),
+			-- msg5: from alice, to bob (normal, but no labels)
+			(5::BIGINT, 1::BIGINT, 'from', 'Alice'),
+			(5::BIGINT, 2::BIGINT, 'to', 'Bob'),
+			-- msg6: from nodomain, to bob (empty domain sender)
+			(6::BIGINT, 3::BIGINT, 'from', 'No Domain'),
+			(6::BIGINT, 2::BIGINT, 'to', 'Bob')
+		`).
+		addTable("labels", "labels", "labels.parquet", labelsCols, `
+			(1::BIGINT, 'INBOX'),
+			(2::BIGINT, 'Work')
+		`).
+		addTable("message_labels", "message_labels", "message_labels.parquet", messageLabelsCols, `
+			(1::BIGINT, 1::BIGINT),
+			(2::BIGINT, 2::BIGINT),
+			(3::BIGINT, 1::BIGINT),
+			(4::BIGINT, 1::BIGINT),
+			(6::BIGINT, 1::BIGINT)
+		`).
+		addEmptyTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `
+			(0::BIGINT, 0::BIGINT, '')
+		`).
+		build()
 }
 
 // TestDuckDBEngine_ListMessages_MatchEmptySender verifies that MatchEmptySender
