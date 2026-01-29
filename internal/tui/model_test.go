@@ -4697,3 +4697,174 @@ func TestExportAttachmentsNoAttachments(t *testing.T) {
 		t.Errorf("expected flash message 'No attachments to export', got '%s'", m.flashMessage)
 	}
 }
+
+// --- Helper method unit tests ---
+
+func TestNavigateList(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        string
+		itemCount  int
+		initCursor int
+		wantCursor int
+		wantHandled bool
+	}{
+		{"down from top", "j", 5, 0, 1, true},
+		{"up from second", "k", 5, 1, 0, true},
+		{"down at end", "j", 5, 4, 4, true},
+		{"up at top", "k", 5, 0, 0, true},
+		{"unhandled key", "x", 5, 0, 0, false},
+		{"empty list down", "j", 0, 0, 0, true},
+		{"empty list up", "k", 0, 0, 0, true},
+		{"home", "home", 5, 3, 0, true},
+		{"end", "end", 5, 0, 4, true},
+		{"end empty list", "end", 0, 0, 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewBuilder().WithRows(
+				query.AggregateRow{Key: "a"},
+			).Build()
+			m.cursor = tt.initCursor
+
+			handled := m.navigateList(tt.key, tt.itemCount)
+			if handled != tt.wantHandled {
+				t.Errorf("navigateList(%q, %d) handled = %v, want %v", tt.key, tt.itemCount, handled, tt.wantHandled)
+			}
+			if m.cursor != tt.wantCursor {
+				t.Errorf("navigateList(%q, %d) cursor = %d, want %d", tt.key, tt.itemCount, m.cursor, tt.wantCursor)
+			}
+		})
+	}
+}
+
+func TestOpenAccountSelector(t *testing.T) {
+	t.Run("no accounts", func(t *testing.T) {
+		m := NewBuilder().Build()
+		m.openAccountSelector()
+		assertModal(t, m, modalAccountSelector)
+		if m.modalCursor != 0 {
+			t.Errorf("expected modalCursor 0, got %d", m.modalCursor)
+		}
+	})
+
+	t.Run("with matching filter", func(t *testing.T) {
+		acctID := int64(42)
+		m := NewBuilder().WithAccounts(
+			query.AccountInfo{ID: 10, Identifier: "a@example.com"},
+			query.AccountInfo{ID: 42, Identifier: "b@example.com"},
+		).Build()
+		m.accountFilter = &acctID
+		m.openAccountSelector()
+		assertModal(t, m, modalAccountSelector)
+		if m.modalCursor != 2 { // index 1 + 1 for "All Accounts"
+			t.Errorf("expected modalCursor 2, got %d", m.modalCursor)
+		}
+	})
+}
+
+func TestOpenAttachmentFilter(t *testing.T) {
+	m := NewBuilder().Build()
+
+	m.attachmentFilter = false
+	m.openAttachmentFilter()
+	if m.modalCursor != 0 {
+		t.Errorf("expected modalCursor 0 for no filter, got %d", m.modalCursor)
+	}
+
+	m.attachmentFilter = true
+	m.openAttachmentFilter()
+	if m.modalCursor != 1 {
+		t.Errorf("expected modalCursor 1 for attachment filter, got %d", m.modalCursor)
+	}
+}
+
+func TestToggleAggregateSelection(t *testing.T) {
+	m := NewBuilder().WithRows(
+		query.AggregateRow{Key: "alice@example.com"},
+		query.AggregateRow{Key: "bob@example.com"},
+	).Build()
+	m.cursor = 0
+
+	// Toggle on
+	m.toggleAggregateSelection()
+	if !m.selection.AggregateKeys["alice@example.com"] {
+		t.Error("expected alice to be selected")
+	}
+
+	// Toggle off
+	m.toggleAggregateSelection()
+	if m.selection.AggregateKeys["alice@example.com"] {
+		t.Error("expected alice to be deselected")
+	}
+}
+
+func TestSelectVisibleAggregates(t *testing.T) {
+	rows := make([]query.AggregateRow, 0, 10)
+	for i := 0; i < 10; i++ {
+		rows = append(rows, query.AggregateRow{Key: fmt.Sprintf("user%d", i)})
+	}
+	m := NewBuilder().WithRows(rows...).Build()
+	m.pageSize = 3
+	m.scrollOffset = 2
+
+	m.selectVisibleAggregates()
+
+	for i := 2; i < 5; i++ {
+		key := fmt.Sprintf("user%d", i)
+		if !m.selection.AggregateKeys[key] {
+			t.Errorf("expected %s to be selected", key)
+		}
+	}
+	// Items outside visible range should not be selected
+	if m.selection.AggregateKeys["user0"] {
+		t.Error("user0 should not be selected")
+	}
+}
+
+func TestSelectVisibleAggregates_OffsetBeyondRows(t *testing.T) {
+	m := NewBuilder().WithRows(
+		query.AggregateRow{Key: "a"},
+	).Build()
+	m.scrollOffset = 100
+	m.pageSize = 5
+
+	m.selectVisibleAggregates()
+
+	if len(m.selection.AggregateKeys) != 0 {
+		t.Error("expected no selections when scrollOffset > len(rows)")
+	}
+}
+
+func TestClearAllSelections(t *testing.T) {
+	m := NewBuilder().WithRows(
+		query.AggregateRow{Key: "a"},
+	).Build()
+	m.selection.AggregateKeys["a"] = true
+	m.selection.MessageIDs[1] = true
+
+	m.clearAllSelections()
+
+	if len(m.selection.AggregateKeys) != 0 || len(m.selection.MessageIDs) != 0 {
+		t.Error("expected all selections to be cleared")
+	}
+}
+
+func TestPushBreadcrumb(t *testing.T) {
+	m := NewBuilder().Build()
+
+	if len(m.breadcrumbs) != 0 {
+		t.Fatal("expected no breadcrumbs initially")
+	}
+
+	m.pushBreadcrumb()
+	if len(m.breadcrumbs) != 1 {
+		t.Errorf("expected 1 breadcrumb, got %d", len(m.breadcrumbs))
+	}
+
+	m.pushBreadcrumb()
+	if len(m.breadcrumbs) != 2 {
+		t.Errorf("expected 2 breadcrumbs, got %d", len(m.breadcrumbs))
+	}
+}

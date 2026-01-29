@@ -1507,7 +1507,10 @@ func (m Model) handleSubAggregateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleMessageListKeys handles keys in the message list view.
 func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Handle list navigation
+	// Handle list navigation.
+	// NOTE: Unlike handleAggregateKeys/handleSubAggregateKeys, we check for deep search
+	// loading between navigation and the early return. This is because pgdown/ctrl+d may
+	// need to trigger loading more search results after updating the cursor position.
 	handled := m.navigateList(msg.String(), len(m.messages))
 
 	// Check if we need to load more deep search results after pgdown
