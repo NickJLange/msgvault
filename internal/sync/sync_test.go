@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -24,43 +23,17 @@ This is a test message body.
 `)
 
 func TestFullSync(t *testing.T) {
-	// Create temp directory for database
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	// Open database
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	// Initialize schema
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	// Create mock API with test messages
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 3,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX", "SENT"})
-	mock.AddMessage("msg3", testMIME, []string{"SENT"})
-
-	// Create syncer
-	syncer := New(mock, st, nil)
+	env.Mock.Profile.MessagesTotal = 3
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX", "SENT"})
+	env.Mock.AddMessage("msg3", testMIME, []string{"SENT"})
 
 	// Run full sync
-	ctx := context.Background()
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -77,18 +50,18 @@ func TestFullSync(t *testing.T) {
 	}
 
 	// Verify API calls
-	if mock.ProfileCalls != 1 {
-		t.Errorf("expected 1 profile call, got %d", mock.ProfileCalls)
+	if env.Mock.ProfileCalls != 1 {
+		t.Errorf("expected 1 profile call, got %d", env.Mock.ProfileCalls)
 	}
-	if mock.LabelsCalls != 1 {
-		t.Errorf("expected 1 labels call, got %d", mock.LabelsCalls)
+	if env.Mock.LabelsCalls != 1 {
+		t.Errorf("expected 1 labels call, got %d", env.Mock.LabelsCalls)
 	}
-	if len(mock.GetMessageCalls) != 3 {
-		t.Errorf("expected 3 message fetches, got %d", len(mock.GetMessageCalls))
+	if len(env.Mock.GetMessageCalls) != 3 {
+		t.Errorf("expected 3 message fetches, got %d", len(env.Mock.GetMessageCalls))
 	}
 
 	// Verify database state
-	stats, err := st.GetStats()
+	stats, err := env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("get stats: %v", err)
 	}
@@ -98,47 +71,24 @@ func TestFullSync(t *testing.T) {
 }
 
 func TestFullSyncResume(t *testing.T) {
-	// Create temp directory
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Open database
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Create mock with pagination
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 4,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg3", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg4", testMIME, []string{"INBOX"})
-	mock.MessagePages = [][]string{
+	env.Mock.Profile.MessagesTotal = 4
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg3", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg4", testMIME, []string{"INBOX"})
+	env.Mock.MessagePages = [][]string{
 		{"msg1", "msg2"},
 		{"msg3", "msg4"},
 	}
 
 	// First sync - only first page
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
 	// Simulate partial sync by only processing first page
-	summary1, err := syncer.Full(ctx, "test@example.com")
+	summary1, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("first sync: %v", err)
 	}
@@ -147,18 +97,18 @@ func TestFullSyncResume(t *testing.T) {
 	}
 
 	// Second sync should skip already-synced messages
-	mock.Reset()
-	mock.Profile = &gmail.Profile{
+	env.Mock.Reset()
+	env.Mock.Profile = &gmail.Profile{
 		EmailAddress:  "test@example.com",
 		MessagesTotal: 4,
 		HistoryID:     12346,
 	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg3", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg4", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg3", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg4", testMIME, []string{"INBOX"})
 
-	summary2, err := syncer.Full(ctx, "test@example.com")
+	summary2, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
@@ -170,43 +120,20 @@ func TestFullSyncResume(t *testing.T) {
 }
 
 func TestFullSyncWithErrors(t *testing.T) {
-	// Create temp directory
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Open database
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Create mock with one failing message
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 3,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg3", testMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 3
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg3", testMIME, []string{"INBOX"})
 
 	// Make msg2 fail to fetch
-	mock.GetMessageError["msg2"] = &gmail.NotFoundError{Path: "/messages/msg2"}
+	env.Mock.GetMessageError["msg2"] = &gmail.NotFoundError{Path: "/messages/msg2"}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("sync with errors: %v", err)
 	}
@@ -222,23 +149,8 @@ func TestFullSyncWithErrors(t *testing.T) {
 
 func TestMIMEParsing(t *testing.T) {
 	// Test that MIME parsing extracts correct fields
-	// Create temp directory
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	complexMIME := []byte(`From: "John Doe" <john@example.com>
 To: "Jane Smith" <jane@example.com>, bob@example.com
@@ -269,20 +181,15 @@ Ymo=
 --boundary123--
 `)
 
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("complex1", complexMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("complex1", complexMIME, []string{"INBOX"})
 
 	opts := DefaultOptions()
-	opts.AttachmentsDir = filepath.Join(tmpDir, "attachments")
-	syncer := New(mock, st, opts)
+	opts.AttachmentsDir = filepath.Join(env.TmpDir, "attachments")
+	env.Syncer = New(env.Mock, env.Store, opts)
 
-	ctx := context.Background()
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -292,7 +199,7 @@ Ymo=
 	}
 
 	// Verify stats include attachment
-	stats, err := st.GetStats()
+	stats, err := env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("get stats: %v", err)
 	}
@@ -302,35 +209,14 @@ Ymo=
 }
 
 func TestFullSyncEmptyInbox(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Mock with no messages
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 0,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 0
+	env.Mock.Profile.HistoryID = 12345
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("sync empty inbox: %v", err)
 	}
@@ -344,74 +230,35 @@ func TestFullSyncEmptyInbox(t *testing.T) {
 }
 
 func TestFullSyncProfileError(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.Mock.ProfileError = fmt.Errorf("auth failed")
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.ProfileError = fmt.Errorf("auth failed")
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	_, err = syncer.Full(ctx, "test@example.com")
+	_, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err == nil {
 		t.Error("expected error when profile fails")
 	}
 }
 
 func TestFullSyncAllDuplicates(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 3,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg3", testMIME, []string{"INBOX"})
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
+	env.Mock.Profile.MessagesTotal = 3
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg3", testMIME, []string{"INBOX"})
 
 	// First sync
-	_, err = syncer.Full(ctx, "test@example.com")
+	_, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("first sync: %v", err)
 	}
 
 	// Second sync with same messages - all should be skipped
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
@@ -425,40 +272,20 @@ func TestFullSyncAllDuplicates(t *testing.T) {
 }
 
 func TestFullSyncNoResume(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 2,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 2
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
 
 	// Force no resume
 	opts := DefaultOptions()
 	opts.NoResume = true
+	env.Syncer = New(env.Mock, env.Store, opts)
 
-	syncer := New(mock, st, opts)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("sync with NoResume: %v", err)
 	}
@@ -472,42 +299,21 @@ func TestFullSyncNoResume(t *testing.T) {
 }
 
 func TestFullSyncAllErrors(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 3,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg3", testMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 3
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg3", testMIME, []string{"INBOX"})
 
 	// Make all messages fail
-	mock.GetMessageError["msg1"] = &gmail.NotFoundError{Path: "/messages/msg1"}
-	mock.GetMessageError["msg2"] = &gmail.NotFoundError{Path: "/messages/msg2"}
-	mock.GetMessageError["msg3"] = &gmail.NotFoundError{Path: "/messages/msg3"}
+	env.Mock.GetMessageError["msg1"] = &gmail.NotFoundError{Path: "/messages/msg1"}
+	env.Mock.GetMessageError["msg2"] = &gmail.NotFoundError{Path: "/messages/msg2"}
+	env.Mock.GetMessageError["msg3"] = &gmail.NotFoundError{Path: "/messages/msg3"}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("sync with all errors: %v", err)
 	}
@@ -521,46 +327,26 @@ func TestFullSyncAllErrors(t *testing.T) {
 }
 
 func TestFullSyncWithQuery(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 2,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 2
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
 
 	opts := DefaultOptions()
 	opts.Query = "before:2024/06/01"
+	env.Syncer = New(env.Mock, env.Store, opts)
 
-	syncer := New(mock, st, opts)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("sync with query: %v", err)
 	}
 
 	// Verify query was passed to the Gmail API
-	if mock.LastQuery != "before:2024/06/01" {
-		t.Errorf("expected query %q, got %q", "before:2024/06/01", mock.LastQuery)
+	if env.Mock.LastQuery != "before:2024/06/01" {
+		t.Errorf("expected query %q, got %q", "before:2024/06/01", env.Mock.LastQuery)
 	}
 
 	// The mock doesn't filter by query, but we can verify sync works with query option
@@ -570,44 +356,23 @@ func TestFullSyncWithQuery(t *testing.T) {
 }
 
 func TestFullSyncPagination(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 6,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 6
+	env.Mock.Profile.HistoryID = 12345
 
 	// Add 6 messages across 3 pages
 	for i := 1; i <= 6; i++ {
-		mock.AddMessage(fmt.Sprintf("msg%d", i), testMIME, []string{"INBOX"})
+		env.Mock.AddMessage(fmt.Sprintf("msg%d", i), testMIME, []string{"INBOX"})
 	}
-	mock.MessagePages = [][]string{
+	env.Mock.MessagePages = [][]string{
 		{"msg1", "msg2"},
 		{"msg3", "msg4"},
 		{"msg5", "msg6"},
 	}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("sync with pagination: %v", err)
 	}
@@ -617,58 +382,28 @@ func TestFullSyncPagination(t *testing.T) {
 	}
 
 	// Verify ListMessages was called 3 times (one per page)
-	if mock.ListMessagesCalls != 3 {
-		t.Errorf("expected 3 list calls (one per page), got %d", mock.ListMessagesCalls)
+	if env.Mock.ListMessagesCalls != 3 {
+		t.Errorf("expected 3 list calls (one per page), got %d", env.Mock.ListMessagesCalls)
 	}
 }
 
 func TestSyncerWithLogger(t *testing.T) {
-	mock := gmail.NewMockAPI()
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	st, err := store.Open(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	syncer := New(mock, st, nil)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Test WithLogger chainability
-	syncer = syncer.WithLogger(nil)
+	syncer := env.Syncer.WithLogger(nil)
 	if syncer == nil {
 		t.Error("WithLogger should return syncer for chaining")
 	}
 }
 
 func TestSyncerWithProgress(t *testing.T) {
-	mock := gmail.NewMockAPI()
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	st, err := store.Open(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	syncer := New(mock, st, nil)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Test WithProgress chainability
-	syncer = syncer.WithProgress(gmail.NullProgress{})
+	syncer := env.Syncer.WithProgress(gmail.NullProgress{})
 	if syncer == nil {
 		t.Error("WithProgress should return syncer for chaining")
 	}
@@ -677,107 +412,43 @@ func TestSyncerWithProgress(t *testing.T) {
 // Tests for incremental sync
 
 func TestIncrementalSyncNoSource(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Should fail - no source exists
-	_, err = syncer.Incremental(ctx, "test@example.com")
+	_, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err == nil {
 		t.Error("expected error for incremental sync without source")
 	}
 }
 
 func TestIncrementalSyncNoHistoryID(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Create source without history ID
-	_, err = st.GetOrCreateSource("gmail", "test@example.com")
+	_, err := env.Store.GetOrCreateSource("gmail", "test@example.com")
 	if err != nil {
 		t.Fatalf("GetOrCreateSource: %v", err)
 	}
 
-	mock := gmail.NewMockAPI()
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
 	// Should fail - no history ID
-	_, err = syncer.Incremental(ctx, "test@example.com")
+	_, err = env.Syncer.Incremental(env.Context, "test@example.com")
 	if err == nil {
 		t.Error("expected error for incremental sync without history ID")
 	}
 }
 
 func TestIncrementalSyncAlreadyUpToDate(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.SetupSource(t, "12345")
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env.Mock.Profile.MessagesTotal = 10
+	env.Mock.Profile.HistoryID = 12345 // Same as cursor
 
-	// Create source with history ID
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	if err != nil {
-		t.Fatalf("GetOrCreateSource: %v", err)
-	}
-	if err := st.UpdateSourceSyncCursor(source.ID, "12345"); err != nil {
-		t.Fatalf("UpdateSourceSyncCursor: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 10,
-		HistoryID:     12345, // Same as cursor
-	}
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Incremental(ctx, "test@example.com")
+	summary, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("incremental sync: %v", err)
 	}
@@ -789,43 +460,18 @@ func TestIncrementalSyncAlreadyUpToDate(t *testing.T) {
 }
 
 func TestIncrementalSyncWithChanges(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.SetupSource(t, "12340")
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	// Create source with history ID
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	if err != nil {
-		t.Fatalf("GetOrCreateSource: %v", err)
-	}
-	if err := st.UpdateSourceSyncCursor(source.ID, "12340"); err != nil {
-		t.Fatalf("UpdateSourceSyncCursor: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 10,
-		HistoryID:     12350, // Newer than cursor
-	}
-	mock.AddMessage("new-msg-1", testMIME, []string{"INBOX"})
-	mock.AddMessage("new-msg-2", testMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 10
+	env.Mock.Profile.HistoryID = 12350 // Newer than cursor
+	env.Mock.AddMessage("new-msg-1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("new-msg-2", testMIME, []string{"INBOX"})
 
 	// Set up history records
-	mock.HistoryRecords = []gmail.HistoryRecord{
+	env.Mock.HistoryRecords = []gmail.HistoryRecord{
 		{
 			MessagesAdded: []gmail.HistoryMessage{
 				{Message: gmail.MessageID{ID: "new-msg-1", ThreadID: "thread_new-msg-1"}},
@@ -837,12 +483,9 @@ func TestIncrementalSyncWithChanges(t *testing.T) {
 			},
 		},
 	}
-	mock.HistoryID = 12350
+	env.Mock.HistoryID = 12350
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Incremental(ctx, "test@example.com")
+	summary, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("incremental sync: %v", err)
 	}
@@ -853,54 +496,33 @@ func TestIncrementalSyncWithChanges(t *testing.T) {
 }
 
 func TestIncrementalSyncWithDeletions(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// First do a full sync to have some messages
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 2,
-		HistoryID:     12340,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
+	env.Mock.Profile.MessagesTotal = 2
+	env.Mock.Profile.HistoryID = 12340
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
 
 	// Full sync first
-	_, err = syncer.Full(ctx, "test@example.com")
+	_, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
 
 	// Now simulate deletion via incremental
-	mock.Profile.HistoryID = 12350
-	mock.HistoryRecords = []gmail.HistoryRecord{
+	env.Mock.Profile.HistoryID = 12350
+	env.Mock.HistoryRecords = []gmail.HistoryRecord{
 		{
 			MessagesDeleted: []gmail.HistoryMessage{
 				{Message: gmail.MessageID{ID: "msg1", ThreadID: "thread_msg1"}},
 			},
 		},
 	}
-	mock.HistoryID = 12350
+	env.Mock.HistoryID = 12350
 
-	summary, err := syncer.Incremental(ctx, "test@example.com")
+	summary, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("incremental sync with deletions: %v", err)
 	}
@@ -912,7 +534,7 @@ func TestIncrementalSyncWithDeletions(t *testing.T) {
 
 	// Verify deletion was persisted - msg1 should have deleted_from_source_at set
 	var deletedAt sql.NullTime
-	err = st.DB().QueryRow(st.Rebind("SELECT deleted_from_source_at FROM messages WHERE source_message_id = ?"), "msg1").Scan(&deletedAt)
+	err = env.Store.DB().QueryRow(env.Store.Rebind("SELECT deleted_from_source_at FROM messages WHERE source_message_id = ?"), "msg1").Scan(&deletedAt)
 	if err != nil {
 		t.Fatalf("query deleted_from_source_at: %v", err)
 	}
@@ -921,7 +543,7 @@ func TestIncrementalSyncWithDeletions(t *testing.T) {
 	}
 
 	// Verify msg2 is NOT marked as deleted
-	err = st.DB().QueryRow(st.Rebind("SELECT deleted_from_source_at FROM messages WHERE source_message_id = ?"), "msg2").Scan(&deletedAt)
+	err = env.Store.DB().QueryRow(env.Store.Rebind("SELECT deleted_from_source_at FROM messages WHERE source_message_id = ?"), "msg2").Scan(&deletedAt)
 	if err != nil {
 		t.Fatalf("query deleted_from_source_at for msg2: %v", err)
 	}
@@ -931,128 +553,55 @@ func TestIncrementalSyncWithDeletions(t *testing.T) {
 }
 
 func TestIncrementalSyncHistoryExpired(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Create source with old history ID
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	if err != nil {
-		t.Fatalf("GetOrCreateSource: %v", err)
-	}
-	if err := st.UpdateSourceSyncCursor(source.ID, "1000"); err != nil {
-		t.Fatalf("UpdateSourceSyncCursor: %v", err)
-	}
+	env.SetupSource(t, "1000")
 
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 10,
-		HistoryID:     12350,
-	}
+	env.Mock.Profile.MessagesTotal = 10
+	env.Mock.Profile.HistoryID = 12350
 	// Simulate history 404
-	mock.HistoryError = &gmail.NotFoundError{Path: "/history"}
+	env.Mock.HistoryError = &gmail.NotFoundError{Path: "/history"}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	_, err = syncer.Incremental(ctx, "test@example.com")
+	_, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err == nil {
 		t.Error("expected error for expired history")
 	}
 }
 
 func TestIncrementalSyncProfileError(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.SetupSource(t, "12345")
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env.Mock.ProfileError = fmt.Errorf("auth failed")
 
-	// Create source with history ID
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	if err != nil {
-		t.Fatalf("GetOrCreateSource: %v", err)
-	}
-	if err := st.UpdateSourceSyncCursor(source.ID, "12345"); err != nil {
-		t.Fatalf("UpdateSourceSyncCursor: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.ProfileError = fmt.Errorf("auth failed")
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	_, err = syncer.Incremental(ctx, "test@example.com")
+	_, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err == nil {
 		t.Error("expected error when profile fails")
 	}
 }
 
 func TestIncrementalSyncWithLabelAdded(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// First do a full sync to have a message
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12340,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12340
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
 
 	// Full sync first
-	_, err = syncer.Full(ctx, "test@example.com")
+	_, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
 
 	// Now simulate label addition via incremental
-	mock.Profile.HistoryID = 12350
-	mock.HistoryRecords = []gmail.HistoryRecord{
+	env.Mock.Profile.HistoryID = 12350
+	env.Mock.HistoryRecords = []gmail.HistoryRecord{
 		{
 			LabelsAdded: []gmail.HistoryLabelChange{
 				{
@@ -1062,11 +611,11 @@ func TestIncrementalSyncWithLabelAdded(t *testing.T) {
 			},
 		},
 	}
-	mock.HistoryID = 12350
+	env.Mock.HistoryID = 12350
 	// Update the mock message with new labels
-	mock.Messages["msg1"].LabelIDs = []string{"INBOX", "STARRED"}
+	env.Mock.Messages["msg1"].LabelIDs = []string{"INBOX", "STARRED"}
 
-	summary, err := syncer.Incremental(ctx, "test@example.com")
+	summary, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("incremental sync with label added: %v", err)
 	}
@@ -1078,44 +627,23 @@ func TestIncrementalSyncWithLabelAdded(t *testing.T) {
 }
 
 func TestIncrementalSyncWithLabelRemoved(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// First do a full sync to have a message with multiple labels
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12340,
-	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX", "STARRED"})
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12340
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX", "STARRED"})
 
 	// Full sync first
-	_, err = syncer.Full(ctx, "test@example.com")
+	_, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
 
 	// Now simulate label removal via incremental
-	mock.Profile.HistoryID = 12350
-	mock.HistoryRecords = []gmail.HistoryRecord{
+	env.Mock.Profile.HistoryID = 12350
+	env.Mock.HistoryRecords = []gmail.HistoryRecord{
 		{
 			LabelsRemoved: []gmail.HistoryLabelChange{
 				{
@@ -1125,11 +653,11 @@ func TestIncrementalSyncWithLabelRemoved(t *testing.T) {
 			},
 		},
 	}
-	mock.HistoryID = 12350
+	env.Mock.HistoryID = 12350
 	// Update the mock message to reflect removed label
-	mock.Messages["msg1"].LabelIDs = []string{"INBOX"}
+	env.Mock.Messages["msg1"].LabelIDs = []string{"INBOX"}
 
-	summary, err := syncer.Incremental(ctx, "test@example.com")
+	summary, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("incremental sync with label removed: %v", err)
 	}
@@ -1143,49 +671,26 @@ func TestIncrementalSyncWithLabelRemoved(t *testing.T) {
 func TestIncrementalSyncLabelAddedToNewMessage(t *testing.T) {
 	// Test case: Label is added to a message we don't have locally yet
 	// This should trigger a fetch of the new message
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.SetupSource(t, "12340")
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	// Create source with history ID and labels already synced
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	if err != nil {
-		t.Fatalf("GetOrCreateSource: %v", err)
-	}
-	if err := st.UpdateSourceSyncCursor(source.ID, "12340"); err != nil {
-		t.Fatalf("UpdateSourceSyncCursor: %v", err)
-	}
 	// Pre-populate labels so handleLabelChange can work
-	if _, err := st.EnsureLabel(source.ID, "INBOX", "Inbox", "system"); err != nil {
+	source, _ := env.Store.GetOrCreateSource("gmail", "test@example.com")
+	if _, err := env.Store.EnsureLabel(source.ID, "INBOX", "Inbox", "system"); err != nil {
 		t.Fatalf("EnsureLabel INBOX: %v", err)
 	}
-	if _, err := st.EnsureLabel(source.ID, "STARRED", "Starred", "system"); err != nil {
+	if _, err := env.Store.EnsureLabel(source.ID, "STARRED", "Starred", "system"); err != nil {
 		t.Fatalf("EnsureLabel STARRED: %v", err)
 	}
 
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12350,
-	}
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12350
 	// Add message that we don't have locally
-	mock.AddMessage("new-msg", testMIME, []string{"INBOX", "STARRED"})
+	env.Mock.AddMessage("new-msg", testMIME, []string{"INBOX", "STARRED"})
 
-	mock.HistoryRecords = []gmail.HistoryRecord{
+	env.Mock.HistoryRecords = []gmail.HistoryRecord{
 		{
 			LabelsAdded: []gmail.HistoryLabelChange{
 				{
@@ -1195,20 +700,15 @@ func TestIncrementalSyncLabelAddedToNewMessage(t *testing.T) {
 			},
 		},
 	}
-	mock.HistoryID = 12350
+	env.Mock.HistoryID = 12350
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	_, err = syncer.Incremental(ctx, "test@example.com")
+	_, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("incremental sync: %v", err)
 	}
 
 	// The message should have been added to the database via handleLabelChange
-	// Note: MessagesAdded counter doesn't capture messages added via label changes
-	// (this is a known limitation), but we can verify the DB state
-	stats, err := st.GetStats()
+	stats, err := env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("GetStats() error = %v", err)
 	}
@@ -1220,41 +720,16 @@ func TestIncrementalSyncLabelAddedToNewMessage(t *testing.T) {
 func TestIncrementalSyncLabelRemovedFromMissingMessage(t *testing.T) {
 	// Test case: Label is removed from a message we don't have locally
 	// This should be a no-op (don't fetch just to remove a label)
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.SetupSource(t, "12340")
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	// Create source with history ID but no messages
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	if err != nil {
-		t.Fatalf("GetOrCreateSource: %v", err)
-	}
-	if err := st.UpdateSourceSyncCursor(source.ID, "12340"); err != nil {
-		t.Fatalf("UpdateSourceSyncCursor: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12350,
-	}
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12350
 	// Don't add the message to mock - simulating we don't have it
 
-	mock.HistoryRecords = []gmail.HistoryRecord{
+	env.Mock.HistoryRecords = []gmail.HistoryRecord{
 		{
 			LabelsRemoved: []gmail.HistoryLabelChange{
 				{
@@ -1264,12 +739,9 @@ func TestIncrementalSyncLabelRemovedFromMissingMessage(t *testing.T) {
 			},
 		},
 	}
-	mock.HistoryID = 12350
+	env.Mock.HistoryID = 12350
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Incremental(ctx, "test@example.com")
+	summary, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("incremental sync: %v", err)
 	}
@@ -1302,40 +774,21 @@ SGVsbG8gV29ybGQh
 `)
 
 func TestFullSyncWithAttachment(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg-with-attachment", testMIMEWithAttachment, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg-with-attachment", testMIMEWithAttachment, []string{"INBOX"})
 
 	// Set up attachments directory
-	attachDir := filepath.Join(tmpDir, "attachments")
+	attachDir := filepath.Join(env.TmpDir, "attachments")
 	opts := &Options{
 		AttachmentsDir: attachDir,
 	}
-	syncer := New(mock, st, opts)
+	env.Syncer = New(env.Mock, env.Store, opts)
 
-	ctx := context.Background()
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -1350,7 +803,7 @@ func TestFullSyncWithAttachment(t *testing.T) {
 	}
 
 	// Check database for attachment record
-	stats, err := st.GetStats()
+	stats, err := env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("GetStats() error = %v", err)
 	}
@@ -1361,22 +814,8 @@ func TestFullSyncWithAttachment(t *testing.T) {
 
 func TestFullSyncWithEmptyAttachment(t *testing.T) {
 	// Test that empty attachments are skipped
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// MIME with empty attachment content (just headers)
 	emptyAttachMIME := []byte(`From: sender@example.com
@@ -1399,28 +838,23 @@ Content-Transfer-Encoding: base64
 --boundary123--
 `)
 
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg-empty-attach", emptyAttachMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg-empty-attach", emptyAttachMIME, []string{"INBOX"})
 
-	attachDir := filepath.Join(tmpDir, "attachments")
+	attachDir := filepath.Join(env.TmpDir, "attachments")
 	opts := &Options{
 		AttachmentsDir: attachDir,
 	}
-	syncer := New(mock, st, opts)
+	env.Syncer = New(env.Mock, env.Store, opts)
 
-	ctx := context.Background()
-	_, err = syncer.Full(ctx, "test@example.com")
+	_, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
 
 	// Empty attachments should be skipped
-	stats, err := st.GetStats()
+	stats, err := env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("GetStats() error = %v", err)
 	}
@@ -1431,47 +865,28 @@ Content-Transfer-Encoding: base64
 
 func TestFullSyncAttachmentDeduplication(t *testing.T) {
 	// Test that same attachment content is deduplicated
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 2,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 2
+	env.Mock.Profile.HistoryID = 12345
 	// Two messages with identical attachment content
-	mock.AddMessage("msg1-attach", testMIMEWithAttachment, []string{"INBOX"})
-	mock.AddMessage("msg2-attach", testMIMEWithAttachment, []string{"INBOX"})
+	env.Mock.AddMessage("msg1-attach", testMIMEWithAttachment, []string{"INBOX"})
+	env.Mock.AddMessage("msg2-attach", testMIMEWithAttachment, []string{"INBOX"})
 
-	attachDir := filepath.Join(tmpDir, "attachments")
+	attachDir := filepath.Join(env.TmpDir, "attachments")
 	opts := &Options{
 		AttachmentsDir: attachDir,
 	}
-	syncer := New(mock, st, opts)
+	env.Syncer = New(env.Mock, env.Store, opts)
 
-	ctx := context.Background()
-	_, err = syncer.Full(ctx, "test@example.com")
+	_, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
 
 	// Should have 2 attachment records (one per message) but only one file
-	stats, err := st.GetStats()
+	stats, err := env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("GetStats() error = %v", err)
 	}
@@ -1509,35 +924,14 @@ Message with no subject line.
 `)
 
 func TestFullSyncNoSubject(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg-no-subject", testMIMENoSubject, []string{"INBOX"})
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg-no-subject", testMIMENoSubject, []string{"INBOX"})
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -1560,35 +954,14 @@ Message with multiple recipients.
 `)
 
 func TestFullSyncMultipleRecipients(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg-multi-recip", testMIMEMultipleRecipients, []string{"INBOX"})
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg-multi-recip", testMIMEMultipleRecipients, []string{"INBOX"})
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -1599,33 +972,15 @@ func TestFullSyncMultipleRecipients(t *testing.T) {
 }
 
 func TestFullSyncWithMIMEParseError(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 2,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 2
+	env.Mock.Profile.HistoryID = 12345
 	// One valid message, one with broken MIME
-	mock.AddMessage("msg-good", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg-good", testMIME, []string{"INBOX"})
 	// Add an invalid MIME message (completely malformed)
-	mock.Messages["msg-bad"] = &gmail.RawMessage{
+	env.Mock.Messages["msg-bad"] = &gmail.RawMessage{
 		ID:           "msg-bad",
 		ThreadID:     "thread_msg-bad",
 		LabelIDs:     []string{"INBOX"},
@@ -1634,10 +989,7 @@ func TestFullSyncWithMIMEParseError(t *testing.T) {
 		SizeEstimate: 100,
 	}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -1653,7 +1005,7 @@ func TestFullSyncWithMIMEParseError(t *testing.T) {
 
 	// Verify the bad message was stored with placeholder content
 	var bodyText string
-	err = st.DB().QueryRow(`
+	err = env.Store.DB().QueryRow(`
 		SELECT body_text FROM messages WHERE source_message_id = 'msg-bad'
 	`).Scan(&bodyText)
 	if err != nil {
@@ -1665,7 +1017,7 @@ func TestFullSyncWithMIMEParseError(t *testing.T) {
 
 	// Verify raw MIME was preserved
 	var rawData []byte
-	err = st.DB().QueryRow(`
+	err = env.Store.DB().QueryRow(`
 		SELECT raw_data FROM message_raw mr
 		JOIN messages m ON m.id = mr.message_id
 		WHERE m.source_message_id = 'msg-bad'
@@ -1680,39 +1032,18 @@ func TestFullSyncWithMIMEParseError(t *testing.T) {
 }
 
 func TestFullSyncMessageFetchError(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 2,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg-good", testMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 2
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg-good", testMIME, []string{"INBOX"})
 
 	// Configure message list to return both IDs, but only one exists
-	mock.MessagePages = [][]string{{"msg-good", "msg-missing"}}
+	env.Mock.MessagePages = [][]string{{"msg-good", "msg-missing"}}
 	// msg-missing won't be in Messages map, so GetMessageRaw will fail with 404
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -1724,45 +1055,17 @@ func TestFullSyncMessageFetchError(t *testing.T) {
 }
 
 func TestIncrementalSyncLabelsError(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.SetupSource(t, "12340")
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	// Create source with history ID
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
-	if err != nil {
-		t.Fatalf("GetOrCreateSource: %v", err)
-	}
-	if err := st.UpdateSourceSyncCursor(source.ID, "12340"); err != nil {
-		t.Fatalf("UpdateSourceSyncCursor: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12350,
-	}
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12350
 	// Make labels call fail
-	mock.LabelsError = fmt.Errorf("labels API error")
+	env.Mock.LabelsError = fmt.Errorf("labels API error")
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	_, err = syncer.Incremental(ctx, "test@example.com")
+	_, err := env.Syncer.Incremental(env.Context, "test@example.com")
 	if err == nil {
 		t.Error("expected error when labels sync fails")
 	}
@@ -1770,59 +1073,39 @@ func TestIncrementalSyncLabelsError(t *testing.T) {
 
 func TestFullSyncResumeWithCursor(t *testing.T) {
 	// Test resuming a sync from a saved checkpoint with pre-existing data
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 4,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 4
+	env.Mock.Profile.HistoryID = 12345
 	// Two pages of messages
-	mock.MessagePages = [][]string{
+	env.Mock.MessagePages = [][]string{
 		{"msg1", "msg2"},
 		{"msg3", "msg4"},
 	}
-	mock.AddMessage("msg1", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg2", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg3", testMIME, []string{"INBOX"})
-	mock.AddMessage("msg4", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg1", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg2", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg3", testMIME, []string{"INBOX"})
+	env.Mock.AddMessage("msg4", testMIME, []string{"INBOX"})
 
 	// Setup: Create source
-	source, err := st.GetOrCreateSource("gmail", "test@example.com")
+	source, err := env.Store.GetOrCreateSource("gmail", "test@example.com")
 	if err != nil {
 		t.Fatalf("GetOrCreateSource: %v", err)
 	}
 
 	// Pre-populate page 1 messages (msg1, msg2) to simulate a real interrupted sync
 	// This models the scenario where page 1 was processed but page 2 wasn't
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
 
 	// First: Process just page 1 by running a sync with only page 1 in mock
-	mock.MessagePages = [][]string{{"msg1", "msg2"}}
-	_, err = syncer.Full(ctx, "test@example.com")
+	env.Mock.MessagePages = [][]string{{"msg1", "msg2"}}
+	_, err = env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("initial sync (page 1): %v", err)
 	}
 
 	// Verify page 1 messages are in DB
-	stats, err := st.GetStats()
+	stats, err := env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("GetStats after page 1: %v", err)
 	}
@@ -1831,14 +1114,14 @@ func TestFullSyncResumeWithCursor(t *testing.T) {
 	}
 
 	// Now set up for resume: restore both pages and create an "interrupted" sync
-	mock.MessagePages = [][]string{
+	env.Mock.MessagePages = [][]string{
 		{"msg1", "msg2"},
 		{"msg3", "msg4"},
 	}
-	mock.ListMessagesCalls = 0 // Reset call counter
+	env.Mock.ListMessagesCalls = 0 // Reset call counter
 
 	// Start a new sync run that will be "interrupted"
-	syncID, err := st.StartSync(source.ID, "full")
+	syncID, err := env.Store.StartSync(source.ID, "full")
 	if err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
@@ -1849,12 +1132,12 @@ func TestFullSyncResumeWithCursor(t *testing.T) {
 		MessagesProcessed: 2,
 		MessagesAdded:     2,
 	}
-	if err := st.UpdateSyncCheckpoint(syncID, checkpoint); err != nil {
+	if err := env.Store.UpdateSyncCheckpoint(syncID, checkpoint); err != nil {
 		t.Fatalf("UpdateSyncCheckpoint: %v", err)
 	}
 
 	// Resume the sync
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync resume: %v", err)
 	}
@@ -1873,12 +1156,12 @@ func TestFullSyncResumeWithCursor(t *testing.T) {
 	}
 
 	// Verify only page 2 was fetched (resumed from page_1 token)
-	if mock.ListMessagesCalls != 1 {
-		t.Errorf("expected 1 ListMessages call (resumed from page_1), got %d", mock.ListMessagesCalls)
+	if env.Mock.ListMessagesCalls != 1 {
+		t.Errorf("expected 1 ListMessages call (resumed from page_1), got %d", env.Mock.ListMessagesCalls)
 	}
 
 	// Verify all 4 messages are now in the database (2 from page 1 + 2 from page 2)
-	stats, err = st.GetStats()
+	stats, err = env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("GetStats() error = %v", err)
 	}
@@ -1889,22 +1172,8 @@ func TestFullSyncResumeWithCursor(t *testing.T) {
 
 func TestFullSyncHTMLOnlyMessage(t *testing.T) {
 	// Test message with HTML body but no plain text
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	htmlOnlyMIME := []byte(`From: sender@example.com
 To: recipient@example.com
@@ -1916,18 +1185,11 @@ Content-Type: text/html; charset="utf-8"
 <html><body><p>This is HTML only content.</p></body></html>
 `)
 
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg-html-only", htmlOnlyMIME, []string{"INBOX"})
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg-html-only", htmlOnlyMIME, []string{"INBOX"})
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -1954,35 +1216,14 @@ func TestFullSyncDuplicateRecipients(t *testing.T) {
 	// Test that duplicate emails in To/Cc/Bcc:
 	// 1. Don't cause UNIQUE constraint failures
 	// 2. Prefer non-empty display names when duplicates have different names
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
+	env.Mock.AddMessage("msg-dup-recip", testMIMEDuplicateRecipients, []string{"INBOX"})
 
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
-	mock.AddMessage("msg-dup-recip", testMIMEDuplicateRecipients, []string{"INBOX"})
-
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync with duplicate recipients: %v", err)
 	}
@@ -1995,7 +1236,7 @@ func TestFullSyncDuplicateRecipients(t *testing.T) {
 	}
 
 	// Verify the message was stored correctly
-	stats, err := st.GetStats()
+	stats, err := env.Store.GetStats()
 	if err != nil {
 		t.Fatalf("GetStats() error = %v", err)
 	}
@@ -2005,7 +1246,7 @@ func TestFullSyncDuplicateRecipients(t *testing.T) {
 
 	// Verify To recipients are deduplicated: duplicate@example.com appears twice, other once = 2 unique
 	var toCount int
-	err = st.DB().QueryRow(st.Rebind(`
+	err = env.Store.DB().QueryRow(env.Store.Rebind(`
 		SELECT COUNT(*) FROM message_recipients mr
 		JOIN messages m ON mr.message_id = m.id
 		WHERE m.source_message_id = ? AND mr.recipient_type = 'to'
@@ -2019,7 +1260,7 @@ func TestFullSyncDuplicateRecipients(t *testing.T) {
 
 	// Verify Cc recipients are deduplicated: cc-dup@example.com appears twice = 1 unique
 	var ccCount int
-	err = st.DB().QueryRow(st.Rebind(`
+	err = env.Store.DB().QueryRow(env.Store.Rebind(`
 		SELECT COUNT(*) FROM message_recipients mr
 		JOIN messages m ON mr.message_id = m.id
 		WHERE m.source_message_id = ? AND mr.recipient_type = 'cc'
@@ -2033,7 +1274,7 @@ func TestFullSyncDuplicateRecipients(t *testing.T) {
 
 	// Verify Bcc recipients are deduplicated: bcc-dup@example.com appears twice = 1 unique
 	var bccCount int
-	err = st.DB().QueryRow(st.Rebind(`
+	err = env.Store.DB().QueryRow(env.Store.Rebind(`
 		SELECT COUNT(*) FROM message_recipients mr
 		JOIN messages m ON mr.message_id = m.id
 		WHERE m.source_message_id = ? AND mr.recipient_type = 'bcc'
@@ -2048,7 +1289,7 @@ func TestFullSyncDuplicateRecipients(t *testing.T) {
 	// Verify display name preference: duplicate@example.com first appears without name,
 	// then with "Duplicate Person" - should prefer the non-empty name
 	var displayName string
-	err = st.DB().QueryRow(st.Rebind(`
+	err = env.Store.DB().QueryRow(env.Store.Rebind(`
 		SELECT mr.display_name FROM message_recipients mr
 		JOIN messages m ON mr.message_id = m.id
 		JOIN participants p ON mr.participant_id = p.id
@@ -2062,7 +1303,7 @@ func TestFullSyncDuplicateRecipients(t *testing.T) {
 	}
 
 	// Verify Cc display name preference: first empty, then "CC Duplicate"
-	err = st.DB().QueryRow(st.Rebind(`
+	err = env.Store.DB().QueryRow(env.Store.Rebind(`
 		SELECT mr.display_name FROM message_recipients mr
 		JOIN messages m ON mr.message_id = m.id
 		JOIN participants p ON mr.participant_id = p.id
@@ -2078,22 +1319,8 @@ func TestFullSyncDuplicateRecipients(t *testing.T) {
 
 func TestFullSyncDateFallbackToInternalDate(t *testing.T) {
 	// Test that when the Date header is unparseable, SentAt falls back to InternalDate
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
 	// Message with unparseable Date header
 	badDateMIME := []byte(`From: sender@example.com
@@ -2105,33 +1332,26 @@ Content-Type: text/plain; charset="utf-8"
 Message with invalid date header.
 `)
 
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
 	// InternalDate is Jan 15, 2024 12:00:00 UTC in milliseconds
-	mock.Messages["msg-bad-date"] = &gmail.RawMessage{
+	env.Mock.Messages["msg-bad-date"] = &gmail.RawMessage{
 		ID:           "msg-bad-date",
 		ThreadID:     "thread-bad-date",
 		LabelIDs:     []string{"INBOX"},
 		Raw:          badDateMIME,
 		InternalDate: 1705320000000, // 2024-01-15T12:00:00Z
 	}
-	mock.MessagePages = [][]string{{"msg-bad-date"}}
+	env.Mock.MessagePages = [][]string{{"msg-bad-date"}}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	_, err = syncer.Full(ctx, "test@example.com")
+	_, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
 
 	// Verify SentAt was set to InternalDate
 	var sentAt, internalDate string
-	err = st.DB().QueryRow(st.Rebind(`
+	err = env.Store.DB().QueryRow(env.Store.Rebind(`
 		SELECT sent_at, internal_date FROM messages WHERE source_message_id = ?
 	`), "msg-bad-date").Scan(&sentAt, &internalDate)
 	if err != nil {
@@ -2157,33 +1377,15 @@ Message with invalid date header.
 
 func TestFullSyncEmptyRawMIME(t *testing.T) {
 	// Test that messages with empty raw MIME data are handled gracefully (counted as errors, not crashes)
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 2,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 2
+	env.Mock.Profile.HistoryID = 12345
 
 	// One good message, one with empty raw MIME
-	mock.AddMessage("msg-good", testMIME, []string{"INBOX"})
-	mock.Messages["msg-empty-raw"] = &gmail.RawMessage{
+	env.Mock.AddMessage("msg-good", testMIME, []string{"INBOX"})
+	env.Mock.Messages["msg-empty-raw"] = &gmail.RawMessage{
 		ID:           "msg-empty-raw",
 		ThreadID:     "thread-empty-raw",
 		LabelIDs:     []string{"INBOX"},
@@ -2191,10 +1393,7 @@ func TestFullSyncEmptyRawMIME(t *testing.T) {
 		SizeEstimate: 0,
 	}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -2210,46 +1409,25 @@ func TestFullSyncEmptyRawMIME(t *testing.T) {
 
 func TestFullSyncEmptyThreadID(t *testing.T) {
 	// Test that messages with empty thread ID use message ID as fallback
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
 	// Enable using the RawMessage.ThreadID for listing (allows empty thread IDs)
-	mock.UseRawThreadID = true
+	env.Mock.UseRawThreadID = true
 
 	// Message with empty thread ID
-	mock.Messages["msg-no-thread"] = &gmail.RawMessage{
+	env.Mock.Messages["msg-no-thread"] = &gmail.RawMessage{
 		ID:           "msg-no-thread",
 		ThreadID:     "", // Empty thread ID - should fallback to message ID
 		LabelIDs:     []string{"INBOX"},
 		Raw:          testMIME,
 		SizeEstimate: int64(len(testMIME)),
 	}
-	mock.MessagePages = [][]string{{"msg-no-thread"}}
+	env.Mock.MessagePages = [][]string{{"msg-no-thread"}}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -2263,7 +1441,7 @@ func TestFullSyncEmptyThreadID(t *testing.T) {
 
 	// Verify the message was stored with a valid thread (using message ID as thread ID)
 	var threadSourceID string
-	err = st.DB().QueryRow(st.Rebind(`
+	err = env.Store.DB().QueryRow(env.Store.Rebind(`
 		SELECT c.source_conversation_id FROM conversations c
 		JOIN messages m ON m.conversation_id = c.id
 		WHERE m.source_message_id = ?
@@ -2279,47 +1457,26 @@ func TestFullSyncEmptyThreadID(t *testing.T) {
 func TestFullSyncListEmptyThreadIDRawPresent(t *testing.T) {
 	// Test that when list response has empty threadID but raw message has threadID,
 	// we use raw.ThreadID (not the message ID fallback)
-	tmpDir, err := os.MkdirTemp("", "msgvault-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	env, cleanup := NewTestEnv(t)
+	defer cleanup()
 
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-
-	if err := st.InitSchema(); err != nil {
-		t.Fatalf("init schema: %v", err)
-	}
-
-	mock := gmail.NewMockAPI()
-	mock.Profile = &gmail.Profile{
-		EmailAddress:  "test@example.com",
-		MessagesTotal: 1,
-		HistoryID:     12345,
-	}
+	env.Mock.Profile.MessagesTotal = 1
+	env.Mock.Profile.HistoryID = 12345
 
 	// Configure mock: list returns empty threadID, but raw message has a threadID
-	mock.ListThreadIDOverride = map[string]string{
+	env.Mock.ListThreadIDOverride = map[string]string{
 		"msg-list-empty": "", // List response has empty threadID
 	}
-	mock.Messages["msg-list-empty"] = &gmail.RawMessage{
+	env.Mock.Messages["msg-list-empty"] = &gmail.RawMessage{
 		ID:           "msg-list-empty",
 		ThreadID:     "actual-thread-from-raw", // Raw message has the real threadID
 		LabelIDs:     []string{"INBOX"},
 		Raw:          testMIME,
 		SizeEstimate: int64(len(testMIME)),
 	}
-	mock.MessagePages = [][]string{{"msg-list-empty"}}
+	env.Mock.MessagePages = [][]string{{"msg-list-empty"}}
 
-	syncer := New(mock, st, nil)
-	ctx := context.Background()
-
-	summary, err := syncer.Full(ctx, "test@example.com")
+	summary, err := env.Syncer.Full(env.Context, "test@example.com")
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
 	}
@@ -2333,7 +1490,7 @@ func TestFullSyncListEmptyThreadIDRawPresent(t *testing.T) {
 
 	// Verify the thread ID came from raw.ThreadID, not the message ID fallback
 	var threadSourceID string
-	err = st.DB().QueryRow(st.Rebind(`
+	err = env.Store.DB().QueryRow(env.Store.Rebind(`
 		SELECT c.source_conversation_id FROM conversations c
 		JOIN messages m ON m.conversation_id = c.id
 		WHERE m.source_message_id = ?
