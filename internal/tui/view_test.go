@@ -137,7 +137,7 @@ func TestApplyHighlight(t *testing.T) {
 			// lipgloss may not produce ANSI in non-TTY environments, so log rather than fail.
 			if tt.wantHas != "" {
 				if result == tt.text {
-					t.Log("lipgloss did not produce styled output (expected in non-TTY environments)")
+					t.Skip("lipgloss did not produce styled output (expected in non-TTY environments)")
 				} else if !strings.Contains(result, tt.wantHas) {
 					t.Errorf("expected raw output to contain %q, got %q", tt.wantHas, result)
 				}
