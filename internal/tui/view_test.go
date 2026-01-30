@@ -2,20 +2,28 @@ package tui
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
 
+// colorProfileMu serializes tests that mutate the global lipgloss color profile.
+var colorProfileMu sync.Mutex
+
 // forceColorProfile sets lipgloss to ANSI color output for tests that assert
-// on styled output. It restores the original profile via t.Cleanup.
-// WARNING: This mutates a global. Tests using this helper must NOT use t.Parallel().
+// on styled output. It acquires colorProfileMu to prevent data races with
+// parallel tests and restores the original profile via t.Cleanup.
 func forceColorProfile(t *testing.T) {
 	t.Helper()
+	colorProfileMu.Lock()
 	orig := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI)
-	t.Cleanup(func() { lipgloss.SetColorProfile(orig) })
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(orig)
+		colorProfileMu.Unlock()
+	})
 }
 
 func stripANSI(s string) string {
