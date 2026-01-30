@@ -19,56 +19,93 @@ func testActionController(t *testing.T, engine *mockEngine) (*ActionController, 
 	return NewActionController(engine, dir, mgr), dir
 }
 
-func TestStageForDeletion_FromAggregateSelection(t *testing.T) {
-	engine := &mockEngine{
-		gmailIDs: []string{"gid1", "gid2", "gid3"},
-	}
-	ctrl, _ := testActionController(t, engine)
+func newTestController(t *testing.T, gmailIDs ...string) *ActionController {
+	t.Helper()
+	ctrl, _ := testActionController(t, &mockEngine{gmailIDs: gmailIDs})
+	return ctrl
+}
 
+type stageArgs struct {
+	aggregates map[string]bool
+	selection  map[int64]bool
+	view       query.ViewType
+	accountID  *int64
+	accounts   []query.AccountInfo
+	messages   []query.MessageSummary
+}
+
+func stageForDeletion(t *testing.T, ctrl *ActionController, args stageArgs) *deletion.Manifest {
+	t.Helper()
+	view := args.view
+	if view == 0 {
+		view = query.ViewSenders
+	}
 	manifest, err := ctrl.StageForDeletion(
-		map[string]bool{"alice@example.com": true},
-		nil,
-		query.ViewSenders,
-		nil,
-		nil,
-		query.ViewSenders,
-		"",
-		query.TimeYear,
-		nil,
+		args.aggregates, args.selection, view, args.accountID, args.accounts,
+		view, "", query.TimeYear, args.messages,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	return manifest
+}
+
+func stringSet(keys ...string) map[string]bool {
+	m := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+	return m
+}
+
+func idSet(ids ...int64) map[int64]bool {
+	m := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
+func msgSummaries(sourceIDs ...string) []query.MessageSummary {
+	out := make([]query.MessageSummary, len(sourceIDs))
+	for i, sid := range sourceIDs {
+		out[i] = query.MessageSummary{ID: int64(i + 1), SourceMessageID: sid}
+	}
+	return out
+}
+
+func assertSingleFilter(t *testing.T, got []string, want string, label string) {
+	t.Helper()
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("expected %s [%s], got %v", label, want, got)
+	}
+}
+
+func TestStageForDeletion_FromAggregateSelection(t *testing.T) {
+	ctrl := newTestController(t, "gid1", "gid2", "gid3")
+
+	manifest := stageForDeletion(t, ctrl, stageArgs{
+		aggregates: stringSet("alice@example.com"),
+	})
 
 	if len(manifest.GmailIDs) != 3 {
 		t.Errorf("expected 3 gmail IDs, got %d", len(manifest.GmailIDs))
 	}
-	if len(manifest.Filters.Senders) != 1 || manifest.Filters.Senders[0] != "alice@example.com" {
-		t.Errorf("expected senders [alice@example.com], got %v", manifest.Filters.Senders)
-	}
+	assertSingleFilter(t, manifest.Filters.Senders, "alice@example.com", "senders")
 	if manifest.CreatedBy != "tui" {
 		t.Errorf("expected createdBy 'tui', got %q", manifest.CreatedBy)
 	}
 }
 
 func TestStageForDeletion_FromMessageSelection(t *testing.T) {
-	engine := &mockEngine{}
-	ctrl, _ := testActionController(t, engine)
+	ctrl := newTestController(t)
 
-	messages := []query.MessageSummary{
-		{ID: 1, SourceMessageID: "gid_a"},
-		{ID: 2, SourceMessageID: "gid_b"},
-		{ID: 3, SourceMessageID: "gid_c"},
-	}
-	selection := map[int64]bool{1: true, 3: true}
+	messages := msgSummaries("gid_a", "gid_b", "gid_c")
 
-	manifest, err := ctrl.StageForDeletion(
-		nil, selection, query.ViewSenders, nil, nil,
-		query.ViewSenders, "", query.TimeYear, messages,
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	manifest := stageForDeletion(t, ctrl, stageArgs{
+		selection: idSet(1, 3),
+		messages:  messages,
+	})
 
 	ids := make([]string, len(manifest.GmailIDs))
 	copy(ids, manifest.GmailIDs)
@@ -80,8 +117,7 @@ func TestStageForDeletion_FromMessageSelection(t *testing.T) {
 }
 
 func TestStageForDeletion_NoSelection(t *testing.T) {
-	engine := &mockEngine{}
-	ctrl, _ := testActionController(t, engine)
+	ctrl := newTestController(t)
 
 	_, err := ctrl.StageForDeletion(
 		nil, nil, query.ViewSenders, nil, nil,
@@ -93,24 +129,12 @@ func TestStageForDeletion_NoSelection(t *testing.T) {
 }
 
 func TestStageForDeletion_MultipleAggregates_DeterministicFilter(t *testing.T) {
-	engine := &mockEngine{gmailIDs: []string{"gid1"}}
-	ctrl, _ := testActionController(t, engine)
+	ctrl := newTestController(t, "gid1")
 
-	agg := map[string]bool{
-		"charlie@example.com": true,
-		"alice@example.com":   true,
-		"bob@example.com":     true,
-	}
+	agg := stringSet("charlie@example.com", "alice@example.com", "bob@example.com")
 
-	// Run multiple times to verify determinism
 	for i := 0; i < 10; i++ {
-		manifest, err := ctrl.StageForDeletion(
-			agg, nil, query.ViewSenders, nil, nil,
-			query.ViewSenders, "", query.TimeYear, nil,
-		)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		manifest := stageForDeletion(t, ctrl, stageArgs{aggregates: agg})
 		if len(manifest.Filters.Senders) != 3 ||
 			manifest.Filters.Senders[0] != "alice@example.com" ||
 			manifest.Filters.Senders[1] != "bob@example.com" ||
@@ -128,67 +152,52 @@ func TestStageForDeletion_ViewTypes(t *testing.T) {
 		check    func(t *testing.T, f deletion.Filters)
 	}{
 		{"senders", query.ViewSenders, "a@b.com", func(t *testing.T, f deletion.Filters) {
-			if len(f.Senders) != 1 || f.Senders[0] != "a@b.com" {
-				t.Errorf("expected senders [a@b.com], got %v", f.Senders)
-			}
+			assertSingleFilter(t, f.Senders, "a@b.com", "senders")
 		}},
 		{"recipients", query.ViewRecipients, "c@d.com", func(t *testing.T, f deletion.Filters) {
-			if len(f.Recipients) != 1 || f.Recipients[0] != "c@d.com" {
-				t.Errorf("expected recipients [c@d.com], got %v", f.Recipients)
-			}
+			assertSingleFilter(t, f.Recipients, "c@d.com", "recipients")
 		}},
 		{"domains", query.ViewDomains, "example.com", func(t *testing.T, f deletion.Filters) {
-			if len(f.SenderDomains) != 1 || f.SenderDomains[0] != "example.com" {
-				t.Errorf("expected sender_domains [example.com], got %v", f.SenderDomains)
-			}
+			assertSingleFilter(t, f.SenderDomains, "example.com", "sender_domains")
 		}},
 		{"labels", query.ViewLabels, "INBOX", func(t *testing.T, f deletion.Filters) {
-			if len(f.Labels) != 1 || f.Labels[0] != "INBOX" {
-				t.Errorf("expected labels [INBOX], got %v", f.Labels)
-			}
+			assertSingleFilter(t, f.Labels, "INBOX", "labels")
 		}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine := &mockEngine{gmailIDs: []string{"gid1"}}
-			ctrl, _ := testActionController(t, engine)
+			ctrl := newTestController(t, "gid1")
 
-			manifest, err := ctrl.StageForDeletion(
-				map[string]bool{tt.key: true}, nil, tt.viewType, nil, nil,
-				tt.viewType, "", query.TimeYear, nil,
-			)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			manifest := stageForDeletion(t, ctrl, stageArgs{
+				aggregates: stringSet(tt.key),
+				view:       tt.viewType,
+			})
 			tt.check(t, manifest.Filters)
 		})
 	}
 }
 
 func TestStageForDeletion_AccountFilter(t *testing.T) {
-	engine := &mockEngine{gmailIDs: []string{"gid1"}}
-	ctrl, _ := testActionController(t, engine)
+	ctrl := newTestController(t, "gid1")
 
 	accountID := int64(42)
 	accounts := []query.AccountInfo{
 		{ID: 42, Identifier: "test@gmail.com"},
 	}
 
-	manifest, err := ctrl.StageForDeletion(
-		map[string]bool{"sender@x.com": true}, nil, query.ViewSenders,
-		&accountID, accounts, query.ViewSenders, "", query.TimeYear, nil,
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	manifest := stageForDeletion(t, ctrl, stageArgs{
+		aggregates: stringSet("sender@x.com"),
+		accountID:  &accountID,
+		accounts:   accounts,
+	})
 	if manifest.Filters.Account != "test@gmail.com" {
 		t.Errorf("expected account 'test@gmail.com', got %q", manifest.Filters.Account)
 	}
 }
 
 func TestExportAttachments_NilDetail(t *testing.T) {
-	ctrl, _ := testActionController(t, &mockEngine{})
+	ctrl := newTestController(t)
 	cmd := ctrl.ExportAttachments(nil, nil)
 	if cmd != nil {
 		t.Error("expected nil cmd for nil detail")
@@ -196,7 +205,7 @@ func TestExportAttachments_NilDetail(t *testing.T) {
 }
 
 func TestExportAttachments_NoSelection(t *testing.T) {
-	ctrl, _ := testActionController(t, &mockEngine{})
+	ctrl := newTestController(t)
 	detail := &query.MessageDetail{
 		Attachments: []query.AttachmentInfo{
 			{ID: 1, Filename: "file.pdf", ContentHash: "abc123"},
