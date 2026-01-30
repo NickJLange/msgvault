@@ -5,6 +5,44 @@ import (
 	"time"
 )
 
+func utcDate(y int, m time.Month, d int) time.Time {
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+func assertHasAttachment(t *testing.T, q *Query, want bool) {
+	t.Helper()
+	if want {
+		if q.HasAttachment == nil || !*q.HasAttachment {
+			t.Errorf("HasAttachment: expected true, got %v", q.HasAttachment)
+		}
+	} else {
+		if q.HasAttachment != nil && *q.HasAttachment {
+			t.Errorf("HasAttachment: expected false/nil, got %v", *q.HasAttachment)
+		}
+	}
+}
+
+func assertTimeEqual(t *testing.T, field string, got *time.Time, want time.Time) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s: expected %v, got nil", field, want)
+	}
+	if !got.Equal(want) {
+		t.Errorf("%s: got %v, want %v", field, *got, want)
+	}
+}
+
+func assertTimeWithin(t *testing.T, field string, got *time.Time, want time.Time, tol time.Duration) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s: expected around %v, got nil", field, want)
+	}
+	diff := got.Sub(want)
+	if diff < -tol || diff > tol {
+		t.Errorf("%s: got %v, expected within %v of %v", field, *got, tol, want)
+	}
+}
+
 func assertStrings(t *testing.T, field string, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -168,9 +206,7 @@ func TestParse(t *testing.T) {
 			wantSubject: []string{"meeting"},
 			wantText:    []string{"project report"},
 			check: func(t *testing.T, q *Query) {
-				if q.HasAttachment == nil || !*q.HasAttachment {
-					t.Errorf("HasAttachment: expected true")
-				}
+				assertHasAttachment(t, q, true)
 				if q.AfterDate == nil {
 					t.Errorf("AfterDate: expected not nil")
 				}
@@ -183,75 +219,47 @@ func TestParse(t *testing.T) {
 
 func TestParse_HasAttachment(t *testing.T) {
 	q := Parse("has:attachment")
-	if q.HasAttachment == nil || !*q.HasAttachment {
-		t.Errorf("HasAttachment: expected true, got %v", q.HasAttachment)
-	}
+	assertHasAttachment(t, q, true)
 }
 
 func TestParse_Dates(t *testing.T) {
 	q := Parse("after:2024-01-15 before:2024-06-30")
-
-	if q.AfterDate == nil {
-		t.Fatal("AfterDate is nil")
-	}
-	expectedAfter := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
-	if !q.AfterDate.Equal(expectedAfter) {
-		t.Errorf("AfterDate: got %v, want %v", q.AfterDate, expectedAfter)
-	}
-
-	if q.BeforeDate == nil {
-		t.Fatal("BeforeDate is nil")
-	}
-	expectedBefore := time.Date(2024, 6, 30, 0, 0, 0, 0, time.UTC)
-	if !q.BeforeDate.Equal(expectedBefore) {
-		t.Errorf("BeforeDate: got %v, want %v", q.BeforeDate, expectedBefore)
-	}
+	assertTimeEqual(t, "AfterDate", q.AfterDate, utcDate(2024, 1, 15))
+	assertTimeEqual(t, "BeforeDate", q.BeforeDate, utcDate(2024, 6, 30))
 }
 
 func TestParse_RelativeDates(t *testing.T) {
 	q := Parse("newer_than:7d")
-	if q.AfterDate == nil {
-		t.Fatal("AfterDate is nil for newer_than")
-	}
-
-	// Should be approximately 7 days ago
 	expected := time.Now().UTC().AddDate(0, 0, -7)
-	diff := q.AfterDate.Sub(expected)
-	if diff < -time.Second || diff > time.Second {
-		t.Errorf("AfterDate: got %v, expected around %v", q.AfterDate, expected)
-	}
+	assertTimeWithin(t, "AfterDate", q.AfterDate, expected, time.Second)
 }
 
 func TestParse_Sizes(t *testing.T) {
-	tests := []struct {
-		query string
-		check func(q *Query) bool
-	}{
-		{
-			query: "larger:5M",
-			check: func(q *Query) bool {
-				return q.LargerThan != nil && *q.LargerThan == 5*1024*1024
-			},
-		},
-		{
-			query: "smaller:100K",
-			check: func(q *Query) bool {
-				return q.SmallerThan != nil && *q.SmallerThan == 100*1024
-			},
-		},
-		{
-			query: "larger:1G",
-			check: func(q *Query) bool {
-				return q.LargerThan != nil && *q.LargerThan == 1024*1024*1024
-			},
-		},
+	type sizeCase struct {
+		query   string
+		larger  *int64
+		smaller *int64
+	}
+	i64 := func(v int64) *int64 { return &v }
+
+	tests := []sizeCase{
+		{query: "larger:5M", larger: i64(5 * 1024 * 1024)},
+		{query: "smaller:100K", smaller: i64(100 * 1024)},
+		{query: "larger:1G", larger: i64(1024 * 1024 * 1024)},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
 			q := Parse(tt.query)
-			if !tt.check(q) {
-				t.Errorf("Size filter not parsed correctly for %q", tt.query)
+			if tt.larger != nil {
+				if q.LargerThan == nil || *q.LargerThan != *tt.larger {
+					t.Errorf("LargerThan: got %v, want %d", q.LargerThan, *tt.larger)
+				}
+			}
+			if tt.smaller != nil {
+				if q.SmallerThan == nil || *q.SmallerThan != *tt.smaller {
+					t.Errorf("SmallerThan: got %v, want %d", q.SmallerThan, *tt.smaller)
+				}
 			}
 		})
 	}
