@@ -34,35 +34,46 @@ func TestTempDir(t *testing.T) {
 	}
 }
 
+// validRelativePaths is a shared fixture of relative paths that should pass
+// validation and be writable. Used by TestValidateRelativePath and
+// TestWriteFileWithValidPaths.
+var validRelativePaths = []string{
+	"simple.txt",
+	"subdir/file.txt",
+	"a/b/c/deep.txt",
+}
+
+// writeAndVerify writes a file and asserts it exists, returning the path.
+func writeAndVerify(t *testing.T, dir, rel string, content []byte) string {
+	t.Helper()
+	path := WriteFile(t, dir, rel, content)
+	MustExist(t, path)
+	return path
+}
+
+// assertFileWritten writes a file, asserts it exists, and verifies its content.
+func assertFileWritten(t *testing.T, dir, rel string, content []byte) string {
+	t.Helper()
+	path := writeAndVerify(t, dir, rel, content)
+	AssertFileContent(t, path, string(content))
+	return path
+}
+
 func TestWriteAndReadFile(t *testing.T) {
 	dir := TempDir(t)
-	content := []byte("hello world")
-
-	path := WriteFile(t, dir, "test.txt", content)
-
-	// Verify file was written
-	MustExist(t, path)
-
-	// Verify content
-	AssertFileContent(t, path, string(content))
+	assertFileWritten(t, dir, "test.txt", []byte("hello world"))
 }
 
 func TestWriteFileSubdir(t *testing.T) {
 	dir := TempDir(t)
-	content := []byte("nested content")
 
-	path := WriteFile(t, dir, "subdir/nested/test.txt", content)
-
-	MustExist(t, path)
+	writeAndVerify(t, dir, "subdir/nested/test.txt", []byte("nested content"))
 	MustExist(t, filepath.Join(dir, "subdir", "nested"))
 }
 
 func TestMustExist(t *testing.T) {
 	dir := TempDir(t)
-	path := WriteFile(t, dir, "exists.txt", []byte("data"))
-
-	// Should not panic
-	MustExist(t, path)
+	writeAndVerify(t, dir, "exists.txt", []byte("data"))
 	MustExist(t, dir)
 }
 
@@ -113,21 +124,6 @@ func TestValidateRelativePath(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "valid simple",
-			path:    "simple.txt",
-			wantErr: false,
-		},
-		{
-			name:    "valid subdir",
-			path:    "subdir/file.txt",
-			wantErr: false,
-		},
-		{
-			name:    "valid deep",
-			path:    "a/b/c/deep.txt",
-			wantErr: false,
-		},
-		{
 			name:    "valid with dots",
 			path:    "file-with-dots.test.txt",
 			wantErr: false,
@@ -137,6 +133,15 @@ func TestValidateRelativePath(t *testing.T) {
 			path:    "./current.txt",
 			wantErr: false,
 		},
+	}
+
+	// Add shared valid paths to the table
+	for _, p := range validRelativePaths {
+		tests = append(tests, struct {
+			name    string
+			path    string
+			wantErr bool
+		}{name: "valid " + p, path: p, wantErr: false})
 	}
 
 	for _, tt := range tests {
@@ -152,17 +157,9 @@ func TestValidateRelativePath(t *testing.T) {
 func TestWriteFileWithValidPaths(t *testing.T) {
 	dir := TempDir(t)
 
-	// These should all succeed
-	validPaths := []string{
-		"simple.txt",
-		"subdir/file.txt",
-		"a/b/c/deep.txt",
-	}
-
-	for _, name := range validPaths {
+	for _, name := range validRelativePaths {
 		t.Run(name, func(t *testing.T) {
-			path := WriteFile(t, dir, name, []byte("data"))
-			MustExist(t, path)
+			writeAndVerify(t, dir, name, []byte("data"))
 		})
 	}
 }
