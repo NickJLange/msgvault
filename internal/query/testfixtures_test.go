@@ -47,14 +47,12 @@ func (b *parquetBuilder) addTable(name, subdir, file, columns, values string) *p
 
 // addEmptyTable adds an empty table (schema only, no rows) to be written as Parquet.
 func (b *parquetBuilder) addEmptyTable(name, subdir, file, columns, dummyValues string) *parquetBuilder {
-	b.tables = append(b.tables, parquetTable{
-		name:    name,
-		subdir:  subdir,
-		file:    file,
-		columns: columns,
-		values:  dummyValues,
-		empty:   true,
-	})
+	return b.addTable(name, subdir, file, columns, dummyValues).withEmpty()
+}
+
+// withEmpty marks the last added table as empty (schema-only).
+func (b *parquetBuilder) withEmpty() *parquetBuilder {
+	b.tables[len(b.tables)-1].empty = true
 	return b
 }
 
@@ -106,21 +104,15 @@ func escapePath(p string) string {
 func writeTableParquet(t *testing.T, db *sql.DB, path, columns, values string, empty bool) {
 	t.Helper()
 
-	var query string
+	whereClause := ""
 	if empty {
-		query = fmt.Sprintf(`
-			COPY (
-				SELECT * FROM (VALUES %s) AS t(%s)
-				WHERE false
-			) TO '%s' (FORMAT PARQUET)
-		`, values, columns, path)
-	} else {
-		query = fmt.Sprintf(`
-			COPY (
-				SELECT * FROM (VALUES %s) AS t(%s)
-			) TO '%s' (FORMAT PARQUET)
-		`, values, columns, path)
+		whereClause = "\n\t\t\t\tWHERE false"
 	}
+	query := fmt.Sprintf(`
+			COPY (
+				SELECT * FROM (VALUES %s) AS t(%s)%s
+			) TO '%s' (FORMAT PARQUET)
+		`, values, columns, whereClause, path)
 
 	if _, err := db.Exec(query); err != nil {
 		t.Fatalf("create parquet %s: %v", path, err)
@@ -138,16 +130,19 @@ const (
 	attachmentsCols       = "message_id, size, filename"
 )
 
-// assertAggregationCount finds a row by key in aggregate results and checks its count.
-func assertAggregationCount(t *testing.T, results []AggregateRow, key string, expectedCount int64) {
+// assertAggregateCounts checks multiple key/count pairs against aggregate results.
+func assertAggregateCounts(t *testing.T, results []AggregateRow, expected map[string]int64) {
 	t.Helper()
+	byKey := make(map[string]int64, len(results))
 	for _, r := range results {
-		if r.Key == key {
-			if r.Count != expectedCount {
-				t.Errorf("%s: expected count %d, got %d", key, expectedCount, r.Count)
-			}
-			return
+		byKey[r.Key] = r.Count
+	}
+	for key, wantCount := range expected {
+		gotCount, ok := byKey[key]
+		if !ok {
+			t.Errorf("key %q not found in results", key)
+		} else if gotCount != wantCount {
+			t.Errorf("%s: expected count %d, got %d", key, wantCount, gotCount)
 		}
 	}
-	t.Errorf("key %q not found in results", key)
 }
