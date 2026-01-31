@@ -977,9 +977,7 @@ func (e *SQLiteEngine) getMessageByQuery(ctx context.Context, whereClause string
 			m.sent_at,
 			m.received_at,
 			COALESCE(m.size_estimate, 0),
-			m.has_attachments,
-			COALESCE(m.body_text, ''),
-			COALESCE(m.body_html, '')
+			m.has_attachments
 		FROM messages m
 		WHERE %s
 	`, whereClause)
@@ -996,8 +994,6 @@ func (e *SQLiteEngine) getMessageByQuery(ctx context.Context, whereClause string
 		&receivedAt,
 		&msg.SizeEstimate,
 		&msg.HasAttachments,
-		&msg.BodyText,
-		&msg.BodyHTML,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1012,6 +1008,22 @@ func (e *SQLiteEngine) getMessageByQuery(ctx context.Context, whereClause string
 	if receivedAt.Valid {
 		t := receivedAt.Time
 		msg.ReceivedAt = &t
+	}
+
+	// Fetch body from separate table (PK lookup, avoids scanning large body B-tree)
+	var bodyText, bodyHTML sql.NullString
+	err = e.db.QueryRowContext(ctx, `
+		SELECT body_text, body_html FROM message_bodies WHERE message_id = ?
+	`, msg.ID).Scan(&bodyText, &bodyHTML)
+	if err == nil {
+		if bodyText.Valid {
+			msg.BodyText = bodyText.String
+		}
+		if bodyHTML.Valid {
+			msg.BodyHTML = bodyHTML.String
+		}
+	} else if err != sql.ErrNoRows {
+		return nil, fmt.Errorf("get message body: %w", err)
 	}
 
 	// If body is empty, try to extract from raw MIME
@@ -1531,12 +1543,12 @@ func (e *SQLiteEngine) buildSearchQueryParts(ctx context.Context, q *search.Quer
 			conditions = append(conditions, "messages_fts MATCH ?")
 			args = append(args, strings.Join(ftsTerms, " "))
 		} else {
-			// Fall back to LIKE-based search on subject/snippet/body
-			// This is slower but works without FTS
+			// Fall back to LIKE-based search on subject/snippet only
+			// Body text is in a separate table; use FTS for body search
 			for _, term := range q.TextTerms {
 				likeTerm := "%" + term + "%"
-				conditions = append(conditions, "(m.subject LIKE ? OR m.snippet LIKE ? OR m.body_text LIKE ?)")
-				args = append(args, likeTerm, likeTerm, likeTerm)
+				conditions = append(conditions, "(m.subject LIKE ? OR m.snippet LIKE ?)")
+				args = append(args, likeTerm, likeTerm)
 			}
 		}
 	}

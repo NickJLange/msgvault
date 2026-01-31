@@ -234,7 +234,6 @@ st, source, convID := setupStore(t)
 		SourceMessageID: "msg-456",
 		MessageType:     "email",
 		Subject:         sql.NullString{String: "Test Subject", Valid: true},
-		BodyText:        sql.NullString{String: "Test body", Valid: true},
 		SizeEstimate:    1000,
 		SentAt:          sql.NullTime{Time: time.Now(), Valid: true},
 	}
@@ -684,8 +683,6 @@ st, source, convID := setupStore(t)
 		SourceMessageID: "msg-all-fields",
 		MessageType:     "email",
 		Subject:         sql.NullString{String: "Full Subject", Valid: true},
-		BodyText:        sql.NullString{String: "Body text content", Valid: true},
-		BodyHTML:        sql.NullString{String: "<p>HTML content</p>", Valid: true},
 		Snippet:         sql.NullString{String: "Preview snippet", Valid: true},
 		SizeEstimate:    2048,
 		SentAt:          sql.NullTime{Time: now, Valid: true},

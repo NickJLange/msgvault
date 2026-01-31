@@ -124,8 +124,6 @@ CREATE TABLE IF NOT EXISTS messages (
 
     -- Content
     subject TEXT,               -- email subject, NULL for chat
-    body_text TEXT,             -- plain text content
-    body_html TEXT,             -- HTML content (email) or rich text
     snippet TEXT,               -- preview/excerpt
 
     -- Threading (for email and replies)
@@ -259,6 +257,13 @@ CREATE TABLE IF NOT EXISTS message_labels (
 -- ============================================================================
 -- RAW DATA STORAGE
 -- ============================================================================
+
+-- Message bodies (separated from messages to keep messages B-tree small)
+CREATE TABLE IF NOT EXISTS message_bodies (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    body_text TEXT,
+    body_html TEXT
+);
 
 -- Original message data (for re-parsing/export)
 CREATE TABLE IF NOT EXISTS message_raw (

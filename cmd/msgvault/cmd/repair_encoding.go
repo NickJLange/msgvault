@@ -126,9 +126,10 @@ func repairMessageFields(s *store.Store, stats *repairStats) error {
 
 	// Query all messages with their raw data
 	rows, err := db.Query(`
-		SELECT m.id, m.subject, m.body_text, m.body_html, m.snippet,
+		SELECT m.id, m.subject, mb.body_text, mb.body_html, m.snippet,
 		       mr.raw_data, mr.compression
 		FROM messages m
+		LEFT JOIN message_bodies mb ON mb.message_id = m.id
 		LEFT JOIN message_raw mr ON mr.message_id = m.id
 	`)
 	if err != nil {
@@ -158,32 +159,43 @@ func repairMessageFields(s *store.Store, stats *repairStats) error {
 		}
 
 		for _, r := range repairs {
-			var updates []string
-			var args []interface{}
-
+			// Update messages table (subject, snippet)
+			var msgUpdates []string
+			var msgArgs []interface{}
 			if r.newSubject.Valid {
-				updates = append(updates, "subject = ?")
-				args = append(args, r.newSubject.String)
-			}
-			if r.newBody.Valid {
-				updates = append(updates, "body_text = ?")
-				args = append(args, r.newBody.String)
-			}
-			if r.newHTML.Valid {
-				updates = append(updates, "body_html = ?")
-				args = append(args, r.newHTML.String)
+				msgUpdates = append(msgUpdates, "subject = ?")
+				msgArgs = append(msgArgs, r.newSubject.String)
 			}
 			if r.newSnippet.Valid {
-				updates = append(updates, "snippet = ?")
-				args = append(args, r.newSnippet.String)
+				msgUpdates = append(msgUpdates, "snippet = ?")
+				msgArgs = append(msgArgs, r.newSnippet.String)
 			}
-
-			if len(updates) > 0 {
-				args = append(args, r.id)
-				query := s.Rebind(fmt.Sprintf("UPDATE messages SET %s WHERE id = ?", strings.Join(updates, ", ")))
-				if _, err := tx.Exec(query, args...); err != nil {
+			if len(msgUpdates) > 0 {
+				msgArgs = append(msgArgs, r.id)
+				query := s.Rebind(fmt.Sprintf("UPDATE messages SET %s WHERE id = ?", strings.Join(msgUpdates, ", ")))
+				if _, err := tx.Exec(query, msgArgs...); err != nil {
 					_ = tx.Rollback()
 					return fmt.Errorf("update message %d: %w", r.id, err)
+				}
+			}
+
+			// Update message_bodies table (body_text, body_html)
+			var bodyUpdates []string
+			var bodyArgs []interface{}
+			if r.newBody.Valid {
+				bodyUpdates = append(bodyUpdates, "body_text = ?")
+				bodyArgs = append(bodyArgs, r.newBody.String)
+			}
+			if r.newHTML.Valid {
+				bodyUpdates = append(bodyUpdates, "body_html = ?")
+				bodyArgs = append(bodyArgs, r.newHTML.String)
+			}
+			if len(bodyUpdates) > 0 {
+				bodyArgs = append(bodyArgs, r.id)
+				query := s.Rebind(fmt.Sprintf("UPDATE message_bodies SET %s WHERE message_id = ?", strings.Join(bodyUpdates, ", ")))
+				if _, err := tx.Exec(query, bodyArgs...); err != nil {
+					_ = tx.Rollback()
+					return fmt.Errorf("update message_bodies %d: %w", r.id, err)
 				}
 			}
 		}

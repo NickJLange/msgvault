@@ -111,12 +111,26 @@ func assertAggRows(t *testing.T, rows []AggregateRow, want []aggExpectation) {
 func (e *testEnv) EnableFTS() {
 	e.T.Helper()
 	_, err := e.DB.Exec(`
-		CREATE VIRTUAL TABLE messages_fts USING fts5(subject, body_text, snippet, content=messages, content_rowid=id);
-		INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
+		CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, subject, body, from_addr, to_addr, cc_addr, tokenize='unicode61 remove_diacritics 1');
 	`)
 	if err != nil {
 		e.T.Skipf("FTS5 not available in this SQLite build: %v", err)
 	}
+
+	// Populate FTS with test data (matching production UpsertFTS behavior)
+	_, err = e.DB.Exec(`
+		INSERT INTO messages_fts (rowid, message_id, subject, body, from_addr, to_addr, cc_addr)
+		SELECT m.id, m.id, COALESCE(m.subject, ''), COALESCE(mb.body_text, ''),
+			COALESCE((SELECT p.email_address FROM message_recipients mr JOIN participants p ON p.id = mr.participant_id WHERE mr.message_id = m.id AND mr.recipient_type = 'from' LIMIT 1), ''),
+			COALESCE((SELECT GROUP_CONCAT(p.email_address, ' ') FROM message_recipients mr JOIN participants p ON p.id = mr.participant_id WHERE mr.message_id = m.id AND mr.recipient_type = 'to'), ''),
+			COALESCE((SELECT GROUP_CONCAT(p.email_address, ' ') FROM message_recipients mr JOIN participants p ON p.id = mr.participant_id WHERE mr.message_id = m.id AND mr.recipient_type = 'cc'), '')
+		FROM messages m
+		LEFT JOIN message_bodies mb ON mb.message_id = m.id
+	`)
+	if err != nil {
+		e.T.Fatalf("populate FTS: %v", err)
+	}
+
 	// Re-create engine to clear cached FTS state
 	e.Engine = NewSQLiteEngine(e.DB)
 }
@@ -163,13 +177,17 @@ func setupTestDB(t *testing.T) *sql.DB {
 			sent_at DATETIME,
 			received_at DATETIME,
 			subject TEXT,
-			body_text TEXT,
-			body_html TEXT,
 			snippet TEXT,
 			size_estimate INTEGER,
 			has_attachments BOOLEAN DEFAULT FALSE,
 			attachment_count INTEGER DEFAULT 0,
 			deleted_from_source_at DATETIME
+		);
+
+		CREATE TABLE message_bodies (
+			message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+			body_text TEXT,
+			body_html TEXT
 		);
 
 		CREATE TABLE message_recipients (
@@ -233,12 +251,20 @@ func setupTestDB(t *testing.T) *sql.DB {
 			(1, 1, 'thread1', 'email_thread', 'Test Thread');
 
 		-- Messages (3 from Alice, 2 from Bob)
-		INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, subject, body_text, snippet, size_estimate, has_attachments, attachment_count) VALUES
-			(1, 1, 1, 'msg1', 'email', '2024-01-15 10:00:00', 'Hello World', 'Message body 1', 'Preview 1', 1000, 0, 0),
-			(2, 1, 1, 'msg2', 'email', '2024-01-16 11:00:00', 'Re: Hello', 'Message body 2', 'Preview 2', 2000, 1, 2),
-			(3, 1, 1, 'msg3', 'email', '2024-02-01 09:00:00', 'Follow up', 'Message body 3', 'Preview 3', 1500, 0, 0),
-			(4, 1, 1, 'msg4', 'email', '2024-02-15 14:00:00', 'Question', 'Message body 4', 'Preview 4', 3000, 1, 1),
-			(5, 1, 1, 'msg5', 'email', '2024-03-01 16:00:00', 'Final', 'Message body 5', 'Preview 5', 500, 0, 0);
+		INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, subject, snippet, size_estimate, has_attachments, attachment_count) VALUES
+			(1, 1, 1, 'msg1', 'email', '2024-01-15 10:00:00', 'Hello World', 'Preview 1', 1000, 0, 0),
+			(2, 1, 1, 'msg2', 'email', '2024-01-16 11:00:00', 'Re: Hello', 'Preview 2', 2000, 1, 2),
+			(3, 1, 1, 'msg3', 'email', '2024-02-01 09:00:00', 'Follow up', 'Preview 3', 1500, 0, 0),
+			(4, 1, 1, 'msg4', 'email', '2024-02-15 14:00:00', 'Question', 'Preview 4', 3000, 1, 1),
+			(5, 1, 1, 'msg5', 'email', '2024-03-01 16:00:00', 'Final', 'Preview 5', 500, 0, 0);
+
+		-- Message bodies
+		INSERT INTO message_bodies (message_id, body_text) VALUES
+			(1, 'Message body 1'),
+			(2, 'Message body 2'),
+			(3, 'Message body 3'),
+			(4, 'Message body 4'),
+			(5, 'Message body 5');
 
 		-- Message recipients (from)
 		INSERT INTO message_recipients (message_id, participant_id, recipient_type, display_name) VALUES
@@ -1023,7 +1049,7 @@ func TestHasFTSTable(t *testing.T) {
 
 	// Try to create FTS table - skip if FTS5 not available in this SQLite build
 	_, err := env.DB.Exec(`
-		CREATE VIRTUAL TABLE messages_fts USING fts5(subject, body_text, snippet, content=messages, content_rowid=id);
+		CREATE VIRTUAL TABLE messages_fts USING fts5(subject, snippet);
 	`)
 	if err != nil {
 		t.Skipf("FTS5 not available in this SQLite build: %v", err)
@@ -1044,7 +1070,7 @@ func TestHasFTSTable_ErrorDoesNotCache(t *testing.T) {
 	// Create FTS table so we can detect if error path was taken
 	// (if FTS exists and canceled call returns false, error path was taken)
 	_, err := env.DB.Exec(`
-		CREATE VIRTUAL TABLE messages_fts USING fts5(subject, body_text, snippet, content=messages, content_rowid=id);
+		CREATE VIRTUAL TABLE messages_fts USING fts5(subject, snippet);
 	`)
 	if err != nil {
 		t.Skipf("FTS5 not available, cannot verify error-does-not-cache behavior: %v", err)

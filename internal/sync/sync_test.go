@@ -633,10 +633,12 @@ func TestFullSyncWithMIMEParseError(t *testing.T) {
 	summary := runFullSync(t, env)
 	assertSummary(t, summary, 2, 0, -1, -1)
 
-	// Verify the bad message was stored with placeholder content
+	// Verify the bad message was stored with placeholder content in message_bodies
 	var bodyText string
 	err := env.Store.DB().QueryRow(`
-		SELECT body_text FROM messages WHERE source_message_id = 'msg-bad'
+		SELECT mb.body_text FROM message_bodies mb
+		JOIN messages m ON m.id = mb.message_id
+		WHERE m.source_message_id = 'msg-bad'
 	`).Scan(&bodyText)
 	if err != nil {
 		t.Fatalf("query bad message: %v", err)

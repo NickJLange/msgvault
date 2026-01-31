@@ -133,19 +133,3 @@ const (
 	attachmentsCols       = "message_id, size, filename"
 )
 
-// assertAggregateCounts checks multiple key/count pairs against aggregate results.
-func assertAggregateCounts(t *testing.T, results []AggregateRow, expected map[string]int64) {
-	t.Helper()
-	byKey := make(map[string]int64, len(results))
-	for _, r := range results {
-		byKey[r.Key] = r.Count
-	}
-	for key, wantCount := range expected {
-		gotCount, ok := byKey[key]
-		if !ok {
-			t.Errorf("key %q not found in results", key)
-		} else if gotCount != wantCount {
-			t.Errorf("%s: expected count %d, got %d", key, wantCount, gotCount)
-		}
-	}
-}

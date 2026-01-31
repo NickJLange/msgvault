@@ -1161,9 +1161,7 @@ func (e *DuckDBEngine) getMessageByQuery(ctx context.Context, whereClause string
 			m.sent_at,
 			m.received_at,
 			COALESCE(m.size_estimate, 0),
-			m.has_attachments,
-			COALESCE(m.body_text, ''),
-			COALESCE(m.body_html, '')
+			m.has_attachments
 		FROM sqlite_db.messages m
 		WHERE %s
 	`, whereClause)
@@ -1180,8 +1178,6 @@ func (e *DuckDBEngine) getMessageByQuery(ctx context.Context, whereClause string
 		&receivedAt,
 		&msg.SizeEstimate,
 		&msg.HasAttachments,
-		&msg.BodyText,
-		&msg.BodyHTML,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1196,6 +1192,22 @@ func (e *DuckDBEngine) getMessageByQuery(ctx context.Context, whereClause string
 	if receivedAt.Valid {
 		t := receivedAt.Time
 		msg.ReceivedAt = &t
+	}
+
+	// Fetch body from separate table (PK lookup)
+	var bodyText, bodyHTML sql.NullString
+	err = e.db.QueryRowContext(ctx, `
+		SELECT body_text, body_html FROM sqlite_db.message_bodies WHERE message_id = ?
+	`, msg.ID).Scan(&bodyText, &bodyHTML)
+	if err == nil {
+		if bodyText.Valid {
+			msg.BodyText = bodyText.String
+		}
+		if bodyHTML.Valid {
+			msg.BodyHTML = bodyHTML.String
+		}
+	} else if err != sql.ErrNoRows {
+		return nil, fmt.Errorf("get message body: %w", err)
 	}
 
 	// If body is empty, try to extract from raw MIME
@@ -1433,12 +1445,12 @@ func (e *DuckDBEngine) Search(ctx context.Context, q *search.Query, limit, offse
 	}
 
 	// Full-text search: use ILIKE fallback (FTS5 not available via sqlite_scan)
-	// ILIKE provides case-insensitive matching like FTS would
+	// Only search subject/snippet; body is in separate table, use FTS for body search
 	if len(q.TextTerms) > 0 {
 		for _, term := range q.TextTerms {
 			likeTerm := "%" + term + "%"
-			conditions = append(conditions, "(m.subject ILIKE ? OR m.snippet ILIKE ? OR m.body_text ILIKE ?)")
-			args = append(args, likeTerm, likeTerm, likeTerm)
+			conditions = append(conditions, "(m.subject ILIKE ? OR m.snippet ILIKE ?)")
+			args = append(args, likeTerm, likeTerm)
 		}
 	}
 

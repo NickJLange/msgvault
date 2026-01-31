@@ -49,8 +49,6 @@ func setupTestSQLite(t *testing.T) (string, func()) {
 			received_at TIMESTAMP,
 			size_estimate INTEGER,
 			has_attachments BOOLEAN DEFAULT FALSE,
-			body_text TEXT,
-			body_html TEXT,
 			deleted_from_source_at TIMESTAMP,
 			UNIQUE(source_id, source_message_id)
 		);

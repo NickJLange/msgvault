@@ -26,8 +26,6 @@ type Message struct {
 	SenderID        sql.NullInt64
 	IsFromMe        bool
 	Subject         sql.NullString
-	BodyText        sql.NullString
-	BodyHTML        sql.NullString
 	Snippet         sql.NullString
 	SizeEstimate    int64
 	HasAttachments  bool
@@ -124,9 +122,9 @@ func (s *Store) UpsertMessage(msg *Message) (int64, error) {
 		INSERT INTO messages (
 			conversation_id, source_id, source_message_id, message_type,
 			sent_at, received_at, internal_date, sender_id, is_from_me,
-			subject, body_text, body_html, snippet, size_estimate,
+			subject, snippet, size_estimate,
 			has_attachments, attachment_count, archived_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(source_id, source_message_id) DO UPDATE SET
 			conversation_id = excluded.conversation_id,
 			sent_at = excluded.sent_at,
@@ -135,15 +133,13 @@ func (s *Store) UpsertMessage(msg *Message) (int64, error) {
 			sender_id = excluded.sender_id,
 			is_from_me = excluded.is_from_me,
 			subject = excluded.subject,
-			body_text = excluded.body_text,
-			body_html = excluded.body_html,
 			snippet = excluded.snippet,
 			size_estimate = excluded.size_estimate,
 			has_attachments = excluded.has_attachments,
 			attachment_count = excluded.attachment_count
 	`, msg.ConversationID, msg.SourceID, msg.SourceMessageID, msg.MessageType,
 		msg.SentAt, msg.ReceivedAt, msg.InternalDate, msg.SenderID, msg.IsFromMe,
-		msg.Subject, msg.BodyText, msg.BodyHTML, msg.Snippet, msg.SizeEstimate,
+		msg.Subject, msg.Snippet, msg.SizeEstimate,
 		msg.HasAttachments, msg.AttachmentCount)
 
 	if err != nil {
@@ -163,6 +159,18 @@ func (s *Store) UpsertMessage(msg *Message) (int64, error) {
 	}
 
 	return id, nil
+}
+
+// UpsertMessageBody stores the body text and HTML for a message in the separate message_bodies table.
+func (s *Store) UpsertMessageBody(messageID int64, bodyText, bodyHTML sql.NullString) error {
+	_, err := s.db.Exec(`
+		INSERT INTO message_bodies (message_id, body_text, body_html)
+		VALUES (?, ?, ?)
+		ON CONFLICT(message_id) DO UPDATE SET
+			body_text = excluded.body_text,
+			body_html = excluded.body_html
+	`, messageID, bodyText, bodyHTML)
+	return err
 }
 
 // UpsertMessageRaw stores the compressed raw MIME data for a message.

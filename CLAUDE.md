@@ -208,6 +208,8 @@ go vet ./...                   # Check for issues
   )
   ```
 
+- **Never JOIN or scan `message_bodies` in list/aggregate/search queries** — this table is separated from `messages` specifically to keep the messages B-tree small for fast scans. Only access `message_bodies` via direct PK lookup (`WHERE message_id = ?`) when displaying a single message detail view. For text search, use FTS5 (`messages_fts`); if FTS is unavailable, search `subject`/`snippet` only.
+
 ## Configuration
 
 All data defaults to `~/.msgvault/`:

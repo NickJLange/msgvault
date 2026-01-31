@@ -496,8 +496,6 @@ func (s *Syncer) ingestMessage(ctx context.Context, sourceID int64, raw *gmail.R
 		MessageType:     "email",
 		SenderID:        senderID,
 		Subject:         sql.NullString{String: subject, Valid: subject != ""},
-		BodyText:        sql.NullString{String: bodyText, Valid: bodyText != ""},
-		BodyHTML:        sql.NullString{String: bodyHTML, Valid: bodyHTML != ""},
 		Snippet:         sql.NullString{String: snippet, Valid: snippet != ""},
 		SizeEstimate:    raw.SizeEstimate,
 		HasAttachments:  len(parsed.Attachments) > 0,
@@ -521,6 +519,14 @@ func (s *Syncer) ingestMessage(ctx context.Context, sourceID int64, raw *gmail.R
 	messageID, err := s.store.UpsertMessage(msg)
 	if err != nil {
 		return fmt.Errorf("upsert message: %w", err)
+	}
+
+	// Store message body in separate table
+	if err := s.store.UpsertMessageBody(messageID,
+		sql.NullString{String: bodyText, Valid: bodyText != ""},
+		sql.NullString{String: bodyHTML, Valid: bodyHTML != ""},
+	); err != nil {
+		return fmt.Errorf("upsert message body: %w", err)
 	}
 
 	// Store raw MIME

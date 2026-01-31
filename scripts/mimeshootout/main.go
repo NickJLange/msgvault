@@ -292,10 +292,11 @@ func loadMessages(db *sql.DB, limit int) ([]PythonMessage, error) {
 			m.id,
 			m.source_message_id,
 			m.subject,
-			m.body_text,
+			mb.body_text,
 			m.sent_at,
 			(SELECT COUNT(*) FROM attachments a WHERE a.message_id = m.id) as attachment_count
 		FROM messages m
+		LEFT JOIN message_bodies mb ON mb.message_id = m.id
 		WHERE EXISTS (SELECT 1 FROM message_raw mr WHERE mr.message_id = m.id)
 		ORDER BY m.id
 		LIMIT ?
