@@ -487,6 +487,11 @@ func TestGetMessage(t *testing.T) {
 	if len(msg.Labels) != 2 {
 		t.Errorf("expected 2 labels, got %d", len(msg.Labels))
 	}
+
+	// Verify body text is fetched from message_bodies table
+	if msg.BodyText != "Message body 1" {
+		t.Errorf("expected body text 'Message body 1', got %q", msg.BodyText)
+	}
 }
 
 func TestGetMessageWithAttachments(t *testing.T) {

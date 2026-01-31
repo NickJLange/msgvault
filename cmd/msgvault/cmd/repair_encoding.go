@@ -179,23 +179,24 @@ func repairMessageFields(s *store.Store, stats *repairStats) error {
 				}
 			}
 
-			// Update message_bodies table (body_text, body_html)
-			var bodyUpdates []string
-			var bodyArgs []interface{}
-			if r.newBody.Valid {
-				bodyUpdates = append(bodyUpdates, "body_text = ?")
-				bodyArgs = append(bodyArgs, r.newBody.String)
-			}
-			if r.newHTML.Valid {
-				bodyUpdates = append(bodyUpdates, "body_html = ?")
-				bodyArgs = append(bodyArgs, r.newHTML.String)
-			}
-			if len(bodyUpdates) > 0 {
-				bodyArgs = append(bodyArgs, r.id)
-				query := s.Rebind(fmt.Sprintf("UPDATE message_bodies SET %s WHERE message_id = ?", strings.Join(bodyUpdates, ", ")))
-				if _, err := tx.Exec(query, bodyArgs...); err != nil {
+			// Upsert message_bodies table (body_text, body_html)
+			// Use INSERT ON CONFLICT to handle rows that may not exist yet
+			if r.newBody.Valid || r.newHTML.Valid {
+				var bodyText, bodyHTML interface{}
+				if r.newBody.Valid {
+					bodyText = r.newBody.String
+				}
+				if r.newHTML.Valid {
+					bodyHTML = r.newHTML.String
+				}
+				query := s.Rebind(`INSERT INTO message_bodies (message_id, body_text, body_html)
+					VALUES (?, ?, ?)
+					ON CONFLICT(message_id) DO UPDATE SET
+						body_text = COALESCE(excluded.body_text, message_bodies.body_text),
+						body_html = COALESCE(excluded.body_html, message_bodies.body_html)`)
+				if _, err := tx.Exec(query, r.id, bodyText, bodyHTML); err != nil {
 					_ = tx.Rollback()
-					return fmt.Errorf("update message_bodies %d: %w", r.id, err)
+					return fmt.Errorf("upsert message_bodies %d: %w", r.id, err)
 				}
 			}
 		}

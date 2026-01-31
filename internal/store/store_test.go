@@ -753,6 +753,49 @@ st, source, convID := setupStore(t)
 	}
 }
 
+func TestStore_UpsertMessageBody(t *testing.T) {
+	st, source, convID := setupStore(t)
+	msgID := createMessage(t, st, source.ID, convID, "msg-body-test")
+
+	// Insert body
+	err := st.UpsertMessageBody(msgID,
+		sql.NullString{String: "hello text", Valid: true},
+		sql.NullString{String: "<p>hello html</p>", Valid: true},
+	)
+	if err != nil {
+		t.Fatalf("UpsertMessageBody() error = %v", err)
+	}
+
+	// Verify via direct query
+	var bodyText, bodyHTML sql.NullString
+	err = st.DB().QueryRow("SELECT body_text, body_html FROM message_bodies WHERE message_id = ?", msgID).Scan(&bodyText, &bodyHTML)
+	if err != nil {
+		t.Fatalf("query message_bodies: %v", err)
+	}
+	if bodyText.String != "hello text" {
+		t.Errorf("body_text = %q, want %q", bodyText.String, "hello text")
+	}
+	if bodyHTML.String != "<p>hello html</p>" {
+		t.Errorf("body_html = %q, want %q", bodyHTML.String, "<p>hello html</p>")
+	}
+
+	// Update body (upsert)
+	err = st.UpsertMessageBody(msgID,
+		sql.NullString{String: "updated text", Valid: true},
+		sql.NullString{},
+	)
+	if err != nil {
+		t.Fatalf("UpsertMessageBody() update error = %v", err)
+	}
+	err = st.DB().QueryRow("SELECT body_text, body_html FROM message_bodies WHERE message_id = ?", msgID).Scan(&bodyText, &bodyHTML)
+	if err != nil {
+		t.Fatalf("query after update: %v", err)
+	}
+	if bodyText.String != "updated text" {
+		t.Errorf("after update: body_text = %q, want %q", bodyText.String, "updated text")
+	}
+}
+
 func TestStore_MessageExistsBatch_Empty(t *testing.T) {
 
 st, source, _ := setupStore(t)
