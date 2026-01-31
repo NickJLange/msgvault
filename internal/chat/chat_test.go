@@ -273,6 +273,39 @@ func TestSessionAsk_LLMError(t *testing.T) {
 	}
 }
 
+func TestSessionAsk_CancelledContext(t *testing.T) {
+	// A pre-cancelled context should cause Ask to fail without appending
+	// an assistant response to history.
+	planJSON, _ := json.Marshal(queryPlan{SearchText: "test", Reasoning: "r"})
+	eng := &stubEngine{
+		searchFastResults: []query.MessageSummary{{ID: 1}},
+		messages: map[int64]*query.MessageDetail{
+			1: {ID: 1, Subject: "S", From: []query.Address{{Email: "a@b.com"}}, SentAt: time.Now()},
+		},
+	}
+	llm := &stubLLM{
+		chatResp:  string(planJSON),
+		streamErr: context.Canceled,
+	}
+
+	session := NewSession(eng, llm, Config{MaxResults: 5})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel
+
+	err := session.Ask(ctx, "test question")
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+
+	// History should have the user message but no assistant response.
+	for _, m := range session.history {
+		if m.Role == "assistant" {
+			t.Error("cancelled request should not append assistant to history")
+		}
+	}
+}
+
 func TestNewOllamaClient_URLValidation(t *testing.T) {
 	tests := []struct {
 		name    string

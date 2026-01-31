@@ -88,12 +88,8 @@ Requires Ollama running with a model available.`,
 		})
 
 		// REPL loop — Ctrl+C cancels the current request, not the session.
-		// We create a fresh context per request so Ctrl+C during generation
-		// doesn't poison subsequent questions.
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt)
-		defer signal.Stop(sigCh)
-
+		// We use signal.NotifyContext per request and call stop after each
+		// to avoid buffered signals leaking across iterations.
 		fmt.Printf("msgvault chat (model: %s, server: %s)\n", model, server)
 		fmt.Println("Type your question, or 'quit' to exit. Ctrl+C cancels current request.")
 		fmt.Println()
@@ -112,15 +108,9 @@ Requires Ollama running with a model available.`,
 				break
 			}
 
-			// Per-request context: cancelled by Ctrl+C or when request completes
-			reqCtx, reqCancel := context.WithCancel(context.Background())
-			go func() {
-				select {
-				case <-sigCh:
-					reqCancel()
-				case <-reqCtx.Done():
-				}
-			}()
+			// Fresh signal context per request — stop() deregisters the
+			// signal handler so no stale signal leaks into the next iteration.
+			reqCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 
 			if err := session.Ask(reqCtx, line); err != nil {
 				if reqCtx.Err() != nil {
@@ -129,7 +119,7 @@ Requires Ollama running with a model available.`,
 					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				}
 			}
-			reqCancel()
+			stop()
 			fmt.Println()
 		}
 
