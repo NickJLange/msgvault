@@ -416,18 +416,15 @@ func (m Model) handleMessageListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	// Back - navigate back if there are breadcrumbs, otherwise clear search
+	// Back - clear inner search first, then navigate back
 	case "esc":
-		// If we have navigation history, go back first (preserves search context)
-		if len(m.breadcrumbs) > 0 {
-			return m.goBack()
-		}
-		// At top level with search, clear it
+		// Always clear an active search before navigating back
 		if m.searchQuery != "" {
 			m.searchQuery = ""
 			m.searchFilter = query.MessageFilter{}
 			m.contextStats = nil
 			m.searchInput.SetValue("")
+			m.searchRequestID++
 			m.loadRequestID++
 			return m, m.loadMessages()
 		}
