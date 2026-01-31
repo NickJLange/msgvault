@@ -289,14 +289,10 @@ func (m Model) handleAggregateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selection.messageIDs = make(map[int64]bool)
 			}
 
-			// If search query is active, use search with drill filter applied
-			if m.searchQuery != "" {
-				m.searchFilter = m.drillFilter
-				m.searchFilter.SourceID = m.accountFilter
-				m.searchFilter.WithAttachmentsOnly = m.attachmentFilter
-				m.searchRequestID++
-				return m, m.loadSearch(m.searchQuery)
-			}
+			// Clear search on drill-down: the drill filter already
+			// constrains to the correct subset. The breadcrumb
+			// preserves the outer search for back-navigation.
+			m.searchQuery = ""
 
 			m.loadRequestID++
 			return m, m.loadMessages()

@@ -2633,9 +2633,9 @@ func TestHeaderViewShowsFilteredStatsOnSearch(t *testing.T) {
 	}
 }
 
-// TestDrillDownWithSearchQueryUsesSearch verifies that drilling down from a
-// filtered aggregate uses search (not loadMessages) to apply the search filter.
-func TestDrillDownWithSearchQueryUsesSearch(t *testing.T) {
+// TestDrillDownWithSearchQueryClearsSearch verifies that drilling down from a
+// filtered aggregate clears the search query (layered search: each level independent).
+func TestDrillDownWithSearchQueryClearsSearch(t *testing.T) {
 	model := newTestModelWithRows(testAggregateRows)
 	model.level = levelAggregates
 	model.searchQuery = "important" // Active search filter
@@ -2650,24 +2650,21 @@ func TestDrillDownWithSearchQueryUsesSearch(t *testing.T) {
 		t.Errorf("expected levelMessageList, got %v", m.level)
 	}
 
-	// Should preserve search query
-	if m.searchQuery != "important" {
-		t.Errorf("expected searchQuery preserved, got %q", m.searchQuery)
+	// Search query should be cleared on drill-down
+	if m.searchQuery != "" {
+		t.Errorf("expected searchQuery cleared, got %q", m.searchQuery)
 	}
 
-	// Should have set searchFilter from drillFilter
-	if m.searchFilter.Sender != "alice@example.com" {
-		t.Errorf("expected searchFilter.Sender=alice@example.com, got %q", m.searchFilter.Sender)
+	// Should use loadMessages (loadRequestID incremented, not searchRequestID)
+	if m.loadRequestID != 1 {
+		t.Errorf("expected loadRequestID=1, got %d", m.loadRequestID)
+	}
+	if m.searchRequestID != 0 {
+		t.Errorf("expected searchRequestID=0, got %d", m.searchRequestID)
 	}
 
-	// Should return a command (the search command)
 	if cmd == nil {
-		t.Error("expected a command to be returned for search")
-	}
-
-	// searchRequestID should have been incremented (not loadRequestID)
-	if m.searchRequestID != 1 {
-		t.Errorf("expected searchRequestID=1, got %d", m.searchRequestID)
+		t.Error("expected a command to be returned")
 	}
 }
 
@@ -2701,9 +2698,9 @@ func TestDrillDownWithoutSearchQueryUsesLoadMessages(t *testing.T) {
 	}
 }
 
-// TestSubAggregateDrillDownWithSearchQuery verifies drill-down from sub-aggregate
-// also uses search when a query is active.
-func TestSubAggregateDrillDownWithSearchQuery(t *testing.T) {
+// TestSubAggregateDrillDownWithSearchQueryClearsSearch verifies drill-down from
+// sub-aggregate also clears the search query (layered search).
+func TestSubAggregateDrillDownWithSearchQueryClearsSearch(t *testing.T) {
 	model := newTestModelWithRows(testAggregateRows)
 	model.level = levelDrillDown
 	model.searchQuery = "urgent"
@@ -2719,23 +2716,103 @@ func TestSubAggregateDrillDownWithSearchQuery(t *testing.T) {
 		t.Errorf("expected levelMessageList, got %v", m.level)
 	}
 
-	// Should preserve search query
-	if m.searchQuery != "urgent" {
-		t.Errorf("expected searchQuery preserved, got %q", m.searchQuery)
+	// Search query should be cleared on drill-down
+	if m.searchQuery != "" {
+		t.Errorf("expected searchQuery cleared, got %q", m.searchQuery)
 	}
 
-	// searchFilter should combine the drill filters
-	if m.searchFilter.Sender != "alice@example.com" {
-		t.Errorf("expected searchFilter.Sender preserved, got %q", m.searchFilter.Sender)
+	// Should use loadMessages (loadRequestID incremented, not searchRequestID)
+	if m.loadRequestID != 1 {
+		t.Errorf("expected loadRequestID=1, got %d", m.loadRequestID)
 	}
-
-	// searchRequestID should have been incremented
-	if m.searchRequestID != 1 {
-		t.Errorf("expected searchRequestID=1, got %d", m.searchRequestID)
+	if m.searchRequestID != 0 {
+		t.Errorf("expected searchRequestID=0, got %d", m.searchRequestID)
 	}
 
 	if cmd == nil {
 		t.Error("expected a command to be returned")
+	}
+}
+
+// TestDrillDownSearchBreadcrumbRoundTrip verifies that searching at aggregate level,
+// drilling down (which clears search), then pressing Esc restores the original search.
+func TestDrillDownSearchBreadcrumbRoundTrip(t *testing.T) {
+	model := newTestModelWithRows(testAggregateRows)
+	model.level = levelAggregates
+	model.searchQuery = "important"
+	model.cursor = 0
+
+	// Drill down — search should be cleared
+	newModel, _ := model.handleAggregateKeys(keyEnter())
+	m := newModel.(Model)
+
+	if m.searchQuery != "" {
+		t.Errorf("expected searchQuery cleared after drill-down, got %q", m.searchQuery)
+	}
+	if m.level != levelMessageList {
+		t.Errorf("expected levelMessageList, got %v", m.level)
+	}
+
+	// Populate messages so Esc handler works
+	m.messages = []query.MessageSummary{{ID: 1}}
+
+	// Esc back — should restore outer search from breadcrumb
+	newModel2, _ := m.handleMessageListKeys(keyEsc())
+	m2 := newModel2.(Model)
+
+	if m2.level != levelAggregates {
+		t.Errorf("expected levelAggregates after Esc, got %v", m2.level)
+	}
+	if m2.searchQuery != "important" {
+		t.Errorf("expected searchQuery restored to %q, got %q", "important", m2.searchQuery)
+	}
+}
+
+// TestDrillDownClearsHighlightTerms verifies that highlightTerms produces no
+// highlighting after drill-down (since searchQuery is empty).
+func TestDrillDownClearsHighlightTerms(t *testing.T) {
+	model := newTestModelWithRows(testAggregateRows)
+	model.level = levelAggregates
+	model.searchQuery = "alice"
+	model.cursor = 0
+
+	newModel, _ := model.handleAggregateKeys(keyEnter())
+	m := newModel.(Model)
+
+	// highlightTerms with empty searchQuery should return text unchanged
+	text := "alice@example.com"
+	result := highlightTerms(text, m.searchQuery)
+	if result != text {
+		t.Errorf("expected no highlighting after drill-down, got %q", result)
+	}
+}
+
+// TestSubAggregateDrillDownSearchBreadcrumbRoundTrip verifies the breadcrumb
+// round-trip through a sub-aggregate drill-down with active search.
+func TestSubAggregateDrillDownSearchBreadcrumbRoundTrip(t *testing.T) {
+	model := newTestModelWithRows(testAggregateRows)
+	model.level = levelDrillDown
+	model.searchQuery = "urgent"
+	model.drillFilter = query.MessageFilter{Sender: "alice@example.com"}
+	model.drillViewType = query.ViewSenders
+	model.viewType = query.ViewLabels
+	model.cursor = 0
+
+	// Drill down to message list — search should be cleared
+	newModel, _ := model.handleAggregateKeys(keyEnter())
+	m := newModel.(Model)
+
+	if m.searchQuery != "" {
+		t.Errorf("expected searchQuery cleared, got %q", m.searchQuery)
+	}
+
+	// Populate messages and go back
+	m.messages = []query.MessageSummary{{ID: 1}}
+	newModel2, _ := m.handleMessageListKeys(keyEsc())
+	m2 := newModel2.(Model)
+
+	if m2.searchQuery != "urgent" {
+		t.Errorf("expected searchQuery restored to %q, got %q", "urgent", m2.searchQuery)
 	}
 }
 
