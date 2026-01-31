@@ -423,7 +423,9 @@ func (c *Client) GetMessagesRawBatch(ctx context.Context, messageIDs []string) (
 func (c *Client) ListHistory(ctx context.Context, startHistoryID uint64, pageToken string) (*HistoryResponse, error) {
 	params := url.Values{}
 	params.Set("startHistoryId", strconv.FormatUint(startHistoryID, 10))
-	params.Set("historyTypes", "messageAdded,messageDeleted,labelAdded,labelRemoved")
+	for _, ht := range []string{"messageAdded", "messageDeleted", "labelAdded", "labelRemoved"} {
+		params.Add("historyTypes", ht)
+	}
 	if pageToken != "" {
 		params.Set("pageToken", pageToken)
 	}
