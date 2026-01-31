@@ -794,6 +794,10 @@ func TestStore_UpsertMessageBody(t *testing.T) {
 	if bodyText.String != "updated text" {
 		t.Errorf("after update: body_text = %q, want %q", bodyText.String, "updated text")
 	}
+	// UpsertMessageBody overwrites both columns; invalid NullString NULLs the column
+	if bodyHTML.Valid {
+		t.Errorf("after update: body_html should be NULL, got %q", bodyHTML.String)
+	}
 }
 
 func TestStore_MessageExistsBatch_Empty(t *testing.T) {
