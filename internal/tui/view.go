@@ -447,12 +447,14 @@ func (m Model) aggregateTableView() string {
 			selIndicator = "   "
 		}
 
-		// Truncate key if needed (rune-aware), then highlight search terms
+		// Pad key to fixed width first, then highlight — so ANSI codes
+		// don't affect column alignment.
 		key := truncateRunes(row.Key, keyWidth)
+		key = fmt.Sprintf("%-*s", keyWidth, key)
 		key = highlightTerms(key, m.searchQuery)
 
-		line := fmt.Sprintf("%-*s %10s %12s %12s",
-			keyWidth, key,
+		line := fmt.Sprintf("%s %10s %12s %12s",
+			key,
 			formatCount(row.Count),
 			formatBytes(row.TotalSize),
 			formatBytes(row.AttachmentSize),
@@ -591,6 +593,7 @@ func (m Model) messageListView() string {
 			from = msg.FromName
 		}
 		from = truncateRunes(from, fromWidth)
+		from = fmt.Sprintf("%-*s", fromWidth, from)
 		from = highlightTerms(from, m.searchQuery)
 
 		// Format subject with indicators (rune-aware)
@@ -602,15 +605,16 @@ func (m Model) messageListView() string {
 			subject = "📎 " + subject
 		}
 		subject = truncateRunes(subject, subjectWidth)
+		subject = fmt.Sprintf("%-*s", subjectWidth, subject)
 		subject = highlightTerms(subject, m.searchQuery)
 
 		// Format size
 		size := formatBytes(msg.SizeEstimate)
 
-		line := fmt.Sprintf("%-*s  %-*s  %-*s  %*s",
+		line := fmt.Sprintf("%-*s  %s  %s  %*s",
 			dateWidth, date,
-			fromWidth, from,
-			subjectWidth, subject,
+			from,
+			subject,
 			sizeWidth, size,
 		)
 
@@ -923,6 +927,7 @@ func (m Model) threadView() string {
 			fromSubject = "🗑 " + fromSubject // Deleted from server indicator
 		}
 		fromSubject = truncateRunes(fromSubject, 40)
+		fromSubject = fmt.Sprintf("%-40s", fromSubject)
 		fromSubject = highlightTerms(fromSubject, m.searchQuery)
 
 		// Format size
@@ -933,7 +938,7 @@ func (m Model) threadView() string {
 		if isSelected {
 			cursor = "> "
 		}
-		row := fmt.Sprintf("%s %-20s %-40s %8s",
+		row := fmt.Sprintf("%s %-20s %s %8s",
 			cursor,
 			dateStr,
 			fromSubject,
