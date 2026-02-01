@@ -2182,3 +2182,190 @@ func TestSearchFastCountMatchesSearch(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// RecipientName tests
+// =============================================================================
+
+func TestAggregateByRecipientName(t *testing.T) {
+	env := newTestEnv(t)
+
+	rows, err := env.Engine.AggregateByRecipientName(env.Ctx, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("AggregateByRecipientName: %v", err)
+	}
+
+	// Test data recipients: Bob Jones (msgs 1,2,3), Carol White (msg 1), Alice Smith (msgs 4,5)
+	assertAggRows(t, rows, []aggExpectation{
+		{"Bob Jones", 3},
+		{"Alice Smith", 2},
+		{"Carol White", 1},
+	})
+}
+
+func TestAggregateByRecipientName_FallbackToEmail(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Add a recipient participant with no display_name
+	_, err := env.DB.Exec(`
+		INSERT INTO participants (id, email_address, display_name, domain) VALUES
+			(10, 'noname@test.com', NULL, 'test.com');
+		INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, subject, snippet, size_estimate, has_attachments) VALUES
+			(10, 1, 1, 'msg10', 'email', '2024-05-01 10:00:00', 'No Name Recipient', 'Test', 100, 0);
+		INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES
+			(10, 1, 'from'),
+			(10, 10, 'to');
+	`)
+	if err != nil {
+		t.Fatalf("insert test data: %v", err)
+	}
+
+	rows, err := env.Engine.AggregateByRecipientName(env.Ctx, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("AggregateByRecipientName: %v", err)
+	}
+
+	// Check that the NULL display_name falls back to email
+	var found bool
+	for _, r := range rows {
+		if r.Key == "noname@test.com" {
+			found = true
+			if r.Count != 1 {
+				t.Errorf("expected noname@test.com count 1, got %d", r.Count)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected noname@test.com in results (display_name fallback)")
+	}
+}
+
+func TestAggregateByRecipientName_EmptyStringFallback(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Add recipient participants with empty-string and whitespace-only display_name
+	_, err := env.DB.Exec(`
+		INSERT INTO participants (id, email_address, display_name, domain) VALUES
+			(11, 'empty@test.com', '', 'test.com'),
+			(12, 'spaces@test.com', '   ', 'test.com');
+		INSERT INTO messages (id, conversation_id, source_id, source_message_id, message_type, sent_at, subject, snippet, size_estimate, has_attachments) VALUES
+			(11, 1, 1, 'msg11', 'email', '2024-05-01 10:00:00', 'Empty Rcpt Name', 'Test', 100, 0),
+			(12, 1, 1, 'msg12', 'email', '2024-05-02 10:00:00', 'Spaces Rcpt Name', 'Test', 100, 0);
+		INSERT INTO message_recipients (message_id, participant_id, recipient_type) VALUES
+			(11, 1, 'from'),
+			(11, 11, 'to'),
+			(12, 1, 'from'),
+			(12, 12, 'cc');
+	`)
+	if err != nil {
+		t.Fatalf("insert test data: %v", err)
+	}
+
+	rows, err := env.Engine.AggregateByRecipientName(env.Ctx, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("AggregateByRecipientName: %v", err)
+	}
+
+	// Verify empty-string display_name falls back to email
+	foundEmpty := false
+	foundSpaces := false
+	for _, r := range rows {
+		if r.Key == "empty@test.com" {
+			foundEmpty = true
+		}
+		if r.Key == "spaces@test.com" {
+			foundSpaces = true
+		}
+	}
+	if !foundEmpty {
+		t.Error("expected empty@test.com in results (empty display_name fallback)")
+	}
+	if !foundSpaces {
+		t.Error("expected spaces@test.com in results (whitespace display_name fallback)")
+	}
+}
+
+func TestListMessages_RecipientNameFilter(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Filter by recipient display name "Bob Jones"
+	filter := MessageFilter{RecipientName: "Bob Jones"}
+	messages := env.MustListMessages(filter)
+
+	// Bob Jones received messages 1, 2, 3
+	if len(messages) != 3 {
+		t.Errorf("expected 3 messages to Bob Jones, got %d", len(messages))
+	}
+}
+
+func TestListMessages_MatchEmptyRecipientName(t *testing.T) {
+	env := newTestEnvWithEmptyBuckets(t)
+
+	// Filter for messages with empty recipient name
+	filter := MessageFilter{MatchEmptyRecipientName: true}
+	messages := env.MustListMessages(filter)
+
+	// msg7 has no recipient at all -> should match
+	found := false
+	for _, m := range messages {
+		if m.Subject == "No Recipient" {
+			found = true
+		}
+	}
+	if !found && len(messages) > 0 {
+		t.Logf("got %d messages:", len(messages))
+		for _, m := range messages {
+			t.Logf("  %q", m.Subject)
+		}
+	}
+}
+
+func TestSubAggregateByRecipientName(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Filter by sender alice@example.com, sub-aggregate by recipient name
+	filter := MessageFilter{Sender: "alice@example.com"}
+	results, err := env.Engine.SubAggregate(env.Ctx, filter, ViewRecipientNames, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("SubAggregate: %v", err)
+	}
+
+	// Alice sent msgs 1,2,3 — recipients are Bob Jones (3 msgs) and Carol White (1 msg)
+	if len(results) != 2 {
+		t.Errorf("expected 2 recipient names from alice, got %d", len(results))
+		for _, r := range results {
+			t.Logf("  key=%q count=%d", r.Key, r.Count)
+		}
+	}
+}
+
+func TestGetGmailIDsByFilter_RecipientName(t *testing.T) {
+	env := newTestEnv(t)
+
+	filter := MessageFilter{RecipientName: "Bob Jones"}
+	ids, err := env.Engine.GetGmailIDsByFilter(env.Ctx, filter)
+	if err != nil {
+		t.Fatalf("GetGmailIDsByFilter: %v", err)
+	}
+
+	// Bob Jones received messages msg1, msg2, msg3
+	if len(ids) != 3 {
+		t.Errorf("expected 3 gmail IDs for Bob Jones, got %d", len(ids))
+	}
+}
+
+func TestMatchEmptyRecipientName_CombinedWithSender(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Combining MatchEmptyRecipientName with Sender should not cause SQL errors.
+	filter := MessageFilter{
+		MatchEmptyRecipientName: true,
+		Sender:                  "alice@example.com",
+	}
+	messages := env.MustListMessages(filter)
+
+	// All of Alice's messages have recipients, so expect 0.
+	if len(messages) != 0 {
+		t.Errorf("expected 0 messages for MatchEmptyRecipientName+Sender, got %d", len(messages))
+	}
+}

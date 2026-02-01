@@ -1408,7 +1408,7 @@ func (m Model) overlayModal(background string) string {
 		modalContent += "  Enter       Drill down\n"
 		modalContent += "  Esc         Go back\n\n"
 		modalContent += "Views & Sorting\n"
-		modalContent += "  g/Tab       Cycle view types (From/SenderName/To/ToName/Dom/Label/Time)\n"
+		modalContent += "  g/Tab       Cycle view types\n"
 	modalContent += "  t           Jump to Time view (cycle granularity when in Time)\n"
 		modalContent += "  s           Cycle sort field\n"
 		modalContent += "  v/r         Reverse sort order\n"

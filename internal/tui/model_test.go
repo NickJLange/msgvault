@@ -5264,3 +5264,306 @@ func TestSenderNamesBreadcrumbRoundTrip(t *testing.T) {
 		t.Errorf("expected drillViewType=ViewSenderNames, got %v", m2.drillViewType)
 	}
 }
+
+// =============================================================================
+// RecipientNames tests
+// =============================================================================
+
+func TestRecipientNamesDrillDown(t *testing.T) {
+	rows := []query.AggregateRow{
+		{Key: "Bob Jones", Count: 10},
+		{Key: "Carol White", Count: 5},
+	}
+
+	model := NewBuilder().WithRows(rows...).
+		WithPageSize(10).WithSize(100, 20).WithViewType(query.ViewRecipientNames).Build()
+
+	// Press Enter to drill into first recipient name
+	newModel, cmd := model.handleAggregateKeys(keyEnter())
+	m := newModel.(Model)
+
+	if m.level != levelMessageList {
+		t.Errorf("expected levelMessageList, got %v", m.level)
+	}
+	if m.drillFilter.RecipientName != "Bob Jones" {
+		t.Errorf("expected drillFilter.RecipientName='Bob Jones', got %q", m.drillFilter.RecipientName)
+	}
+	if m.drillViewType != query.ViewRecipientNames {
+		t.Errorf("expected drillViewType=ViewRecipientNames, got %v", m.drillViewType)
+	}
+	if cmd == nil {
+		t.Error("expected command to load messages")
+	}
+	if len(m.breadcrumbs) != 1 {
+		t.Errorf("expected 1 breadcrumb, got %d", len(m.breadcrumbs))
+	}
+}
+
+func TestRecipientNamesDrillDownEmptyKey(t *testing.T) {
+	rows := []query.AggregateRow{
+		{Key: "", Count: 3},
+	}
+
+	model := NewBuilder().WithRows(rows...).
+		WithPageSize(10).WithSize(100, 20).WithViewType(query.ViewRecipientNames).Build()
+
+	newModel, _ := model.handleAggregateKeys(keyEnter())
+	m := newModel.(Model)
+
+	if !m.drillFilter.MatchEmptyRecipientName {
+		t.Error("expected MatchEmptyRecipientName=true for empty key")
+	}
+	if m.drillFilter.RecipientName != "" {
+		t.Errorf("expected empty RecipientName, got %q", m.drillFilter.RecipientName)
+	}
+}
+
+func TestRecipientNamesDrillFilterKey(t *testing.T) {
+	model := NewBuilder().
+		WithRows(query.AggregateRow{Key: "test", Count: 1}).
+		WithPageSize(10).WithSize(100, 20).Build()
+	model.drillViewType = query.ViewRecipientNames
+	model.drillFilter = query.MessageFilter{RecipientName: "Jane Doe"}
+
+	key := model.drillFilterKey()
+	if key != "Jane Doe" {
+		t.Errorf("expected drillFilterKey='Jane Doe', got %q", key)
+	}
+
+	// Test empty case
+	model.drillFilter = query.MessageFilter{MatchEmptyRecipientName: true}
+	key = model.drillFilterKey()
+	if key != "(empty)" {
+		t.Errorf("expected '(empty)' for MatchEmptyRecipientName, got %q", key)
+	}
+}
+
+func TestRecipientNamesBreadcrumbPrefix(t *testing.T) {
+	prefix := viewTypePrefix(query.ViewRecipientNames)
+	if prefix != "RN" {
+		t.Errorf("expected prefix 'RN', got %q", prefix)
+	}
+
+	abbrev := viewTypeAbbrev(query.ViewRecipientNames)
+	if abbrev != "Recipient Name" {
+		t.Errorf("expected abbrev 'Recipient Name', got %q", abbrev)
+	}
+}
+
+func TestShiftTabCyclesRecipientNames(t *testing.T) {
+	model := NewBuilder().
+		WithRows(query.AggregateRow{Key: "test", Count: 1}).
+		WithPageSize(10).WithSize(100, 20).
+		WithViewType(query.ViewRecipientNames).Build()
+
+	// Shift+tab from RecipientNames should go back to Recipients
+	m := applyAggregateKey(t, model, keyShiftTab())
+	if m.viewType != query.ViewRecipients {
+		t.Errorf("expected ViewRecipients after shift+tab from RecipientNames, got %v", m.viewType)
+	}
+}
+
+func TestTabFromRecipientsThenRecipientNames(t *testing.T) {
+	model := NewBuilder().
+		WithRows(query.AggregateRow{Key: "test", Count: 1}).
+		WithPageSize(10).WithSize(100, 20).
+		WithViewType(query.ViewRecipients).Build()
+
+	// Tab from Recipients should go to RecipientNames
+	m := applyAggregateKey(t, model, keyTab())
+	if m.viewType != query.ViewRecipientNames {
+		t.Errorf("expected ViewRecipientNames after tab from Recipients, got %v", m.viewType)
+	}
+
+	// Tab from RecipientNames should go to Domains
+	m.loading = false
+	m = applyAggregateKey(t, m, keyTab())
+	if m.viewType != query.ViewDomains {
+		t.Errorf("expected ViewDomains after tab from RecipientNames, got %v", m.viewType)
+	}
+}
+
+func TestSubAggregateFromRecipientNames(t *testing.T) {
+	rows := []query.AggregateRow{
+		{Key: "Bob Jones", Count: 10},
+	}
+	msgs := []query.MessageSummary{
+		{ID: 1, Subject: "Test"},
+	}
+
+	model := NewBuilder().WithRows(rows...).WithMessages(msgs...).
+		WithPageSize(10).WithSize(100, 20).WithViewType(query.ViewRecipientNames).Build()
+
+	// Drill into the name
+	newModel, _ := model.handleAggregateKeys(keyEnter())
+	m := newModel.(Model)
+
+	// Tab to sub-aggregate
+	m.messages = msgs
+	newModel2, _ := m.handleMessageListKeys(keyTab())
+	m2 := newModel2.(Model)
+
+	if m2.level != levelDrillDown {
+		t.Fatalf("expected levelDrillDown, got %v", m2.level)
+	}
+	// nextSubGroupView(RecipientNames) = Domains
+	if m2.viewType != query.ViewDomains {
+		t.Errorf("expected ViewDomains (nextSubGroupView from RecipientNames), got %v", m2.viewType)
+	}
+}
+
+func TestHasDrillFilterWithRecipientName(t *testing.T) {
+	model := NewBuilder().
+		WithRows(query.AggregateRow{Key: "test", Count: 1}).
+		WithPageSize(10).WithSize(100, 20).Build()
+
+	model.drillFilter = query.MessageFilter{RecipientName: "John"}
+	if !model.hasDrillFilter() {
+		t.Error("expected hasDrillFilter=true for RecipientName")
+	}
+
+	model.drillFilter = query.MessageFilter{MatchEmptyRecipientName: true}
+	if !model.hasDrillFilter() {
+		t.Error("expected hasDrillFilter=true for MatchEmptyRecipientName")
+	}
+}
+
+func TestRecipientNamesBreadcrumbRoundTrip(t *testing.T) {
+	model := NewBuilder().
+		WithMessages(
+			query.MessageSummary{ID: 1, Subject: "Test message"},
+		).
+		WithLevel(levelMessageList).WithViewType(query.ViewRecipients).Build()
+	model.drillFilter = query.MessageFilter{RecipientName: "Bob Jones"}
+	model.drillViewType = query.ViewRecipientNames
+
+	// Press Enter to go to message detail
+	newModel, _ := model.Update(keyEnter())
+	m := newModel.(Model)
+
+	if m.level != levelMessageDetail {
+		t.Fatalf("expected levelMessageDetail, got %v", m.level)
+	}
+
+	// Verify breadcrumb saved RecipientName
+	if len(m.breadcrumbs) == 0 {
+		t.Fatal("expected breadcrumb to be saved")
+	}
+	bc := m.breadcrumbs[len(m.breadcrumbs)-1]
+	if bc.state.drillFilter.RecipientName != "Bob Jones" {
+		t.Errorf("expected breadcrumb RecipientName='Bob Jones', got %q", bc.state.drillFilter.RecipientName)
+	}
+
+	// Press Esc to go back
+	newModel2, _ := m.goBack()
+	m2 := newModel2.(Model)
+
+	if m2.level != levelMessageList {
+		t.Errorf("expected levelMessageList after goBack, got %v", m2.level)
+	}
+	if m2.drillFilter.RecipientName != "Bob Jones" {
+		t.Errorf("expected RecipientName preserved after goBack, got %q", m2.drillFilter.RecipientName)
+	}
+	if m2.drillViewType != query.ViewRecipientNames {
+		t.Errorf("expected drillViewType=ViewRecipientNames, got %v", m2.drillViewType)
+	}
+}
+
+// =============================================================================
+// t hotkey tests
+// =============================================================================
+
+func TestTKeyJumpsToTimeView(t *testing.T) {
+	model := NewBuilder().
+		WithRows(query.AggregateRow{Key: "test", Count: 10}).
+		WithPageSize(10).WithSize(100, 20).
+		WithViewType(query.ViewSenders).Build()
+
+	// Press 't' from Senders view - should jump to Time
+	m := applyAggregateKey(t, model, key('t'))
+	if m.viewType != query.ViewTime {
+		t.Errorf("expected ViewTime after 't' from Senders, got %v", m.viewType)
+	}
+	if !m.loading {
+		t.Error("expected loading=true after 't' key")
+	}
+}
+
+func TestTKeyJumpsToTimeFromAnyView(t *testing.T) {
+	views := []query.ViewType{
+		query.ViewSenders,
+		query.ViewSenderNames,
+		query.ViewRecipients,
+		query.ViewRecipientNames,
+		query.ViewDomains,
+		query.ViewLabels,
+	}
+
+	for _, vt := range views {
+		model := NewBuilder().
+			WithRows(query.AggregateRow{Key: "test", Count: 10}).
+			WithPageSize(10).WithSize(100, 20).
+			WithViewType(vt).Build()
+
+		m := applyAggregateKey(t, model, key('t'))
+		if m.viewType != query.ViewTime {
+			t.Errorf("from %v: expected ViewTime after 't', got %v", vt, m.viewType)
+		}
+	}
+}
+
+func TestTKeyCyclesGranularityInTimeView(t *testing.T) {
+	model := NewBuilder().
+		WithRows(query.AggregateRow{Key: "2024-01", Count: 10}).
+		WithPageSize(10).WithSize(100, 20).
+		WithViewType(query.ViewTime).Build()
+	model.timeGranularity = query.TimeYear
+
+	// Press 't' in Time view - should cycle granularity
+	m := applyAggregateKey(t, model, key('t'))
+	if m.viewType != query.ViewTime {
+		t.Errorf("expected to stay in ViewTime, got %v", m.viewType)
+	}
+	if m.timeGranularity != query.TimeMonth {
+		t.Errorf("expected TimeMonth after cycling from TimeYear, got %v", m.timeGranularity)
+	}
+}
+
+func TestTKeyResetsSelectionOnJump(t *testing.T) {
+	model := NewBuilder().
+		WithRows(query.AggregateRow{Key: "test", Count: 10}).
+		WithPageSize(10).WithSize(100, 20).
+		WithViewType(query.ViewSenders).Build()
+	model.selection.aggregateKeys["test"] = true
+	model.cursor = 5
+	model.scrollOffset = 3
+
+	m := applyAggregateKey(t, model, key('t'))
+	if len(m.selection.aggregateKeys) != 0 {
+		t.Error("expected selection cleared after 't' jump")
+	}
+	if m.cursor != 0 {
+		t.Errorf("expected cursor=0 after 't' jump, got %d", m.cursor)
+	}
+	if m.scrollOffset != 0 {
+		t.Errorf("expected scrollOffset=0 after 't' jump, got %d", m.scrollOffset)
+	}
+}
+
+func TestTKeyDoesNotResetSelectionOnCycle(t *testing.T) {
+	model := NewBuilder().
+		WithRows(query.AggregateRow{Key: "2024", Count: 10}).
+		WithPageSize(10).WithSize(100, 20).
+		WithViewType(query.ViewTime).Build()
+	model.timeGranularity = query.TimeYear
+
+	// When already in Time view, 't' cycles granularity but doesn't clear selection
+	m := applyAggregateKey(t, model, key('t'))
+	if m.viewType != query.ViewTime {
+		t.Errorf("expected ViewTime, got %v", m.viewType)
+	}
+	// Granularity should have cycled
+	if m.timeGranularity != query.TimeMonth {
+		t.Errorf("expected TimeMonth, got %v", m.timeGranularity)
+	}
+}

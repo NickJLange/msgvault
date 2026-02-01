@@ -1995,3 +1995,195 @@ func TestBuildSearchConditions_EscapedWildcards(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// RecipientName tests
+// =============================================================================
+
+func TestDuckDBEngine_AggregateByRecipientName(t *testing.T) {
+	engine := newParquetEngine(t)
+	ctx := context.Background()
+	results, err := engine.AggregateByRecipientName(ctx, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("AggregateByRecipientName: %v", err)
+	}
+
+	// Expected: Bob (msgs 1,2,3=3), Alice (msgs 4,5=2), Carol (msg 1=1), Dan (msg 2 cc=1)
+	if len(results) != 4 {
+		t.Errorf("expected 4 recipient names, got %d", len(results))
+		for _, r := range results {
+			t.Logf("  key=%q count=%d", r.Key, r.Count)
+		}
+	}
+
+	bob := requireAggregateRow(t, results, "Bob")
+	if bob.Count != 3 {
+		t.Errorf("expected Bob count 3, got %d", bob.Count)
+	}
+	alice := requireAggregateRow(t, results, "Alice")
+	if alice.Count != 2 {
+		t.Errorf("expected Alice count 2, got %d", alice.Count)
+	}
+	carol := requireAggregateRow(t, results, "Carol")
+	if carol.Count != 1 {
+		t.Errorf("expected Carol count 1, got %d", carol.Count)
+	}
+	dan := requireAggregateRow(t, results, "Dan")
+	if dan.Count != 1 {
+		t.Errorf("expected Dan count 1, got %d", dan.Count)
+	}
+}
+
+func TestDuckDBEngine_SubAggregateByRecipientName(t *testing.T) {
+	engine := newParquetEngine(t)
+	ctx := context.Background()
+
+	// Filter by sender alice, sub-aggregate by recipient name
+	filter := MessageFilter{Sender: "alice@example.com"}
+	results, err := engine.SubAggregate(ctx, filter, ViewRecipientNames, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("SubAggregate: %v", err)
+	}
+
+	// Alice sent msgs 1,2,3 — recipients: Bob (3), Carol (1), Dan (1 via cc)
+	if len(results) != 3 {
+		t.Errorf("expected 3 recipient names, got %d", len(results))
+		for _, r := range results {
+			t.Logf("  key=%q count=%d", r.Key, r.Count)
+		}
+	}
+}
+
+func TestDuckDBEngine_ListMessages_RecipientNameFilter(t *testing.T) {
+	engine := newParquetEngine(t)
+	ctx := context.Background()
+
+	filter := MessageFilter{RecipientName: "Bob"}
+	results, err := engine.ListMessages(ctx, filter)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+
+	// Bob received messages 1, 2, 3
+	if len(results) != 3 {
+		t.Errorf("expected 3 messages to Bob, got %d", len(results))
+	}
+}
+
+func TestDuckDBEngine_GetGmailIDsByFilter_RecipientName(t *testing.T) {
+	engine := newParquetEngine(t)
+	ctx := context.Background()
+
+	filter := MessageFilter{RecipientName: "Alice"}
+	ids, err := engine.GetGmailIDsByFilter(ctx, filter)
+	if err != nil {
+		t.Fatalf("GetGmailIDsByFilter: %v", err)
+	}
+
+	// Alice received msgs 4, 5
+	if len(ids) != 2 {
+		t.Errorf("expected 2 gmail IDs for Alice, got %d", len(ids))
+	}
+}
+
+func TestDuckDBEngine_AggregateByRecipientName_EmptyStringFallback(t *testing.T) {
+	// Build Parquet data with empty-string and whitespace display_names on recipients
+	analyticsDir, cleanup := newParquetBuilder(t).
+		addTable("messages", "messages/year=2024", "data.parquet", messagesCols, `
+			(1::BIGINT, 1::BIGINT, 'msg1', 100::BIGINT, 'Hello', 'Snippet', TIMESTAMP '2024-01-15 10:00:00', 1000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
+			(2::BIGINT, 1::BIGINT, 'msg2', 101::BIGINT, 'World', 'Snippet', TIMESTAMP '2024-01-16 10:00:00', 1000::BIGINT, false, NULL::TIMESTAMP, 2024, 1)
+		`).
+		addTable("sources", "sources", "sources.parquet", sourcesCols, `
+			(1::BIGINT, 'test@gmail.com')
+		`).
+		addTable("participants", "participants", "participants.parquet", participantsCols, `
+			(1::BIGINT, 'sender@test.com', 'test.com', 'Sender'),
+			(2::BIGINT, 'empty@test.com', 'test.com', ''),
+			(3::BIGINT, 'spaces@test.com', 'test.com', '   ')
+		`).
+		addTable("message_recipients", "message_recipients", "message_recipients.parquet", messageRecipientsCols, `
+			(1::BIGINT, 1::BIGINT, 'from', 'Sender'),
+			(1::BIGINT, 2::BIGINT, 'to', 'Empty'),
+			(2::BIGINT, 1::BIGINT, 'from', 'Sender'),
+			(2::BIGINT, 3::BIGINT, 'cc', 'Spaces')
+		`).
+		addEmptyTable("labels", "labels", "labels.parquet", labelsCols, `(1::BIGINT, 'x')`).
+		addEmptyTable("message_labels", "message_labels", "message_labels.parquet", messageLabelsCols, `(1::BIGINT, 1::BIGINT)`).
+		addEmptyTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `(1::BIGINT, 100::BIGINT, 'x')`).
+		build()
+	defer cleanup()
+
+	engine, err := NewDuckDBEngine(analyticsDir, "", nil)
+	if err != nil {
+		t.Fatalf("NewDuckDBEngine: %v", err)
+	}
+	defer engine.Close()
+
+	ctx := context.Background()
+	results, err := engine.AggregateByRecipientName(ctx, DefaultAggregateOptions())
+	if err != nil {
+		t.Fatalf("AggregateByRecipientName: %v", err)
+	}
+
+	// Both '' and '   ' display_name should fall back to email
+	if len(results) != 2 {
+		t.Errorf("expected 2 recipient names, got %d", len(results))
+		for _, r := range results {
+			t.Logf("  key=%q count=%d", r.Key, r.Count)
+		}
+	}
+
+	for _, r := range results {
+		if r.Key == "" || r.Key == "   " {
+			t.Errorf("unexpected empty/whitespace key: %q", r.Key)
+		}
+	}
+	requireAggregateRow(t, results, "empty@test.com")
+	requireAggregateRow(t, results, "spaces@test.com")
+}
+
+func TestDuckDBEngine_ListMessages_MatchEmptyRecipientName(t *testing.T) {
+	// Build Parquet data with a message that has no recipients
+	analyticsDir, cleanup := newParquetBuilder(t).
+		addTable("messages", "messages/year=2024", "data.parquet", messagesCols, `
+			(1::BIGINT, 1::BIGINT, 'msg1', 100::BIGINT, 'Has Recipient', 'Snippet', TIMESTAMP '2024-01-15 10:00:00', 1000::BIGINT, false, NULL::TIMESTAMP, 2024, 1),
+			(2::BIGINT, 1::BIGINT, 'msg2', 101::BIGINT, 'No Recipient', 'Snippet', TIMESTAMP '2024-01-16 10:00:00', 1000::BIGINT, false, NULL::TIMESTAMP, 2024, 1)
+		`).
+		addTable("sources", "sources", "sources.parquet", sourcesCols, `
+			(1::BIGINT, 'test@gmail.com')
+		`).
+		addTable("participants", "participants", "participants.parquet", participantsCols, `
+			(1::BIGINT, 'alice@test.com', 'test.com', 'Alice'),
+			(2::BIGINT, 'bob@test.com', 'test.com', 'Bob')
+		`).
+		addTable("message_recipients", "message_recipients", "message_recipients.parquet", messageRecipientsCols, `
+			(1::BIGINT, 1::BIGINT, 'from', 'Alice'),
+			(1::BIGINT, 2::BIGINT, 'to', 'Bob')
+		`).
+		addEmptyTable("labels", "labels", "labels.parquet", labelsCols, `(1::BIGINT, 'x')`).
+		addEmptyTable("message_labels", "message_labels", "message_labels.parquet", messageLabelsCols, `(1::BIGINT, 1::BIGINT)`).
+		addEmptyTable("attachments", "attachments", "attachments.parquet", attachmentsCols, `(1::BIGINT, 100::BIGINT, 'x')`).
+		build()
+	defer cleanup()
+
+	engine, err := NewDuckDBEngine(analyticsDir, "", nil)
+	if err != nil {
+		t.Fatalf("NewDuckDBEngine: %v", err)
+	}
+	defer engine.Close()
+
+	ctx := context.Background()
+	filter := MessageFilter{MatchEmptyRecipientName: true}
+	results, err := engine.ListMessages(ctx, filter)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+
+	// msg2 has no to/cc recipients -> should match
+	if len(results) != 1 {
+		t.Errorf("expected 1 message with empty recipient name, got %d", len(results))
+	}
+	if len(results) > 0 && results[0].Subject != "No Recipient" {
+		t.Errorf("expected 'No Recipient', got %q", results[0].Subject)
+	}
+}
