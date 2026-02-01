@@ -15,56 +15,81 @@ jobs:
       matrix:
         include:
           - goarch: amd64
-            cc: gcc
+            zig_target: x86_64-linux-musl
           - goarch: arm64
-            cc: aarch64-linux-gnu-gcc
+            zig_target: aarch64-linux-musl
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
-      - name: Install cross-compiler
-        if: matrix.goarch == 'arm64'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install zig
+        run: |
+          ZIG_VERSION="0.14.0"
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" | tar -xJ
+          echo "$PWD/zig-linux-x86_64-${ZIG_VERSION}" >> $GITHUB_PATH
 
       - name: Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
-          CC: ${{ matrix.cc }}
+          CC: zigcc
+          CXX: zigcxx
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
 
+          # Create zig cc/cxx wrappers that target musl for fully static binaries
+          mkdir -p /tmp/zigbin
+          cat > /tmp/zigbin/zigcc << 'ZIGEOF'
+          #!/bin/bash
+          exec zig cc -target $ZIG_TARGET "$@"
+          ZIGEOF
+          cat > /tmp/zigbin/zigcxx << 'ZIGEOF'
+          #!/bin/bash
+          exec zig c++ -target $ZIG_TARGET "$@"
+          ZIGEOF
+          chmod +x /tmp/zigbin/zigcc /tmp/zigbin/zigcxx
+          export PATH="/tmp/zigbin:$PATH"
+          export ZIG_TARGET="${{ matrix.zig_target }}"
+          export CC=zigcc
+          export CXX=zigcxx
+
           mkdir -p dist
-          LDFLAGS="-s -w -X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=v${VERSION}"
+          LDFLAGS="-s -w -X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=v${VERSION} -linkmode external -extldflags '-static'"
           go build -tags fts5 -trimpath -ldflags="$LDFLAGS" -o dist/msgvault ./cmd/msgvault
+
+          # Verify the binary is statically linked
+          file dist/msgvault
+          ldd dist/msgvault 2>&1 || true
 
           cd dist
           ARCHIVE="msgvault_${VERSION}_linux_${{ matrix.goarch }}.tar.gz"
           tar czf "$ARCHIVE" msgvault
           rm msgvault
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: msgvault-linux-${{ matrix.goarch }}
           path: dist/*.tar.gz
 
   build-darwin:
-    runs-on: macos-latest
     strategy:
       matrix:
         include:
           - goarch: amd64
+            runner: macos-13
           - goarch: arm64
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -85,7 +110,7 @@ jobs:
           tar czf "$ARCHIVE" msgvault
           rm msgvault
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: msgvault-darwin-${{ matrix.goarch }}
           path: dist/*.tar.gz
@@ -94,9 +119,9 @@ jobs:
     needs: [build-linux, build-darwin]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
@@ -112,7 +137,6 @@ jobs:
         run: |
           TAG_NAME="${GITHUB_REF#refs/tags/}"
 
-          # Only extract message from annotated tags (type "tag"), not lightweight tags (type "commit")
           TAG_TYPE=$(git cat-file -t "$TAG_NAME")
           if [ "$TAG_TYPE" != "tag" ]; then
             echo "Warning: $TAG_NAME is a lightweight tag, using auto-generated notes"
@@ -120,11 +144,9 @@ jobs:
             exit 0
           fi
 
-          # Get the tag message body (our changelog), skipping the first line ("Release X.Y.Z")
           TAG_MSG=$(git tag -l --format='%(contents:body)' "$TAG_NAME")
 
           if [ -n "$TAG_MSG" ]; then
-            # Use unique delimiter to avoid conflicts with tag message content
             DELIM="TAGMSG_$(date +%s%N)"
             echo "body<<$DELIM" >> $GITHUB_OUTPUT
             echo "$TAG_MSG" >> $GITHUB_OUTPUT
@@ -135,7 +157,7 @@ jobs:
           fi
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@26994186c0ac3ef5cae75ac16aa32e8153525f77 # v1
         with:
           files: |
             artifacts/*.tar.gz

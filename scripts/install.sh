@@ -79,7 +79,7 @@ verify_checksum() {
         return 0
     fi
 
-    local expected=$(grep "$filename" "$checksums_file" | cut -d' ' -f1)
+    local expected=$(grep -F " ${filename}" "$checksums_file" | cut -d' ' -f1)
     if [ -z "$expected" ]; then
         warn "No checksum found for $filename, skipping verification"
         return 0
@@ -132,6 +132,8 @@ install_from_release() {
     # Download and verify checksum
     if download "${base_url}/SHA256SUMS" "$tmpdir/SHA256SUMS" 2>/dev/null; then
         verify_checksum "$tmpdir/release.tar.gz" "$tmpdir/SHA256SUMS" "$filename"
+    else
+        warn "WARNING: Could not download SHA256SUMS — integrity not verified"
     fi
 
     info "Extracting..."
