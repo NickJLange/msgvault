@@ -62,9 +62,23 @@ jobs:
           LDFLAGS="-s -w -X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=v${VERSION} -linkmode external -extldflags '-static'"
           go build -tags fts5 -trimpath -ldflags="$LDFLAGS" -o dist/msgvault ./cmd/msgvault
 
-          # Verify the binary is statically linked
+          # Verify the binary is statically linked (fail build if not)
+          echo "--- Binary type ---"
           file dist/msgvault
-          ldd dist/msgvault 2>&1 || true
+          file dist/msgvault | grep -q "statically linked" || { echo "FATAL: binary is not statically linked"; exit 1; }
+
+          echo "--- Dynamic dependencies ---"
+          LDD_OUT=$(ldd dist/msgvault 2>&1 || true)
+          echo "$LDD_OUT"
+          echo "$LDD_OUT" | grep -q "not a dynamic executable\|not a regular file\|statically linked" || { echo "FATAL: binary has dynamic dependencies"; exit 1; }
+
+          # Smoke test on native arch (amd64 only — arm64 is cross-compiled)
+          if [ "${{ matrix.goarch }}" = "amd64" ]; then
+            echo "--- Smoke test ---"
+            SMOKE_OUT=$(dist/msgvault version 2>&1)
+            echo "$SMOKE_OUT"
+            echo "$SMOKE_OUT" | grep -q "v${VERSION}" || { echo "FATAL: version output doesn't match tag"; exit 1; }
+          fi
 
           cd dist
           ARCHIVE="msgvault_${VERSION}_linux_${{ matrix.goarch }}.tar.gz"
@@ -105,6 +119,20 @@ jobs:
           LDFLAGS="-s -w -X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=v${VERSION}"
           go build -tags fts5 -trimpath -ldflags="$LDFLAGS" -o dist/msgvault ./cmd/msgvault
 
+          # Verify no libstdc++ dependency (macOS should only link libc++ and system libs)
+          echo "--- Dynamic libraries ---"
+          otool -L dist/msgvault
+          if otool -L dist/msgvault | grep -q 'libstdc++'; then
+            echo "FATAL: binary links libstdc++ — this will cause compatibility issues"
+            exit 1
+          fi
+
+          # Smoke test — verify binary runs and reports correct version
+          echo "--- Smoke test ---"
+          SMOKE_OUT=$(dist/msgvault version 2>&1)
+          echo "$SMOKE_OUT"
+          echo "$SMOKE_OUT" | grep -q "v${VERSION}" || { echo "FATAL: version output doesn't match tag"; exit 1; }
+
           cd dist
           ARCHIVE="msgvault_${VERSION}_darwin_${{ matrix.goarch }}.tar.gz"
           tar czf "$ARCHIVE" msgvault
@@ -125,6 +153,27 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Validate artifacts
+        run: |
+          echo "--- Validating all archives ---"
+          for archive in artifacts/*.tar.gz; do
+            echo "Checking $archive..."
+            tmpdir=$(mktemp -d)
+            tar -xzf "$archive" -C "$tmpdir"
+            test -f "$tmpdir/msgvault" || { echo "FATAL: msgvault binary missing from $archive"; exit 1; }
+            test -x "$tmpdir/msgvault" || { echo "FATAL: msgvault binary not executable in $archive"; exit 1; }
+
+            # Smoke test linux amd64 artifact (runs natively on ubuntu runner)
+            if echo "$archive" | grep -q "linux_amd64"; then
+              SMOKE_OUT=$("$tmpdir/msgvault" version 2>&1)
+              echo "  linux_amd64 smoke: $SMOKE_OUT"
+            fi
+
+            file "$tmpdir/msgvault"
+            rm -rf "$tmpdir"
+            echo "  OK"
+          done
 
       - name: Generate checksums
         run: |
