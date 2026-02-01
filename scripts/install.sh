@@ -79,7 +79,7 @@ verify_checksum() {
         return 0
     fi
 
-    local expected=$(awk -v f="$filename" '$2==f {print $1}' "$checksums_file")
+    local expected=$(awk -v f="$filename" '{gsub(/^\*/, "", $2); if ($2==f) {print $1; exit}}' "$checksums_file")
     if [ -z "$expected" ]; then
         warn "No checksum found for $filename, skipping verification"
         return 0
