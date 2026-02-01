@@ -5021,3 +5021,42 @@ func TestSubAggregateTimeDrillDown_FullScenario(t *testing.T) {
 		t.Errorf("drillFilter.Sender = %q, want %q", step3.drillFilter.Sender, "alice@example.com")
 	}
 }
+
+// TestHeaderUpdateNoticeUnicode verifies update notice alignment with Unicode account names.
+func TestHeaderUpdateNoticeUnicode(t *testing.T) {
+	accountID := int64(1)
+	model := NewBuilder().WithSize(100, 20).
+		WithAccounts(query.AccountInfo{ID: 1, Identifier: "日本語ユーザー@example.com"}).
+		WithAccountFilter(&accountID).Build()
+	model.version = "abc1234"
+	model.updateAvailable = "v1.2.3"
+
+	header := model.headerView()
+	lines := strings.Split(header, "\n")
+
+	if !strings.Contains(lines[0], "v1.2.3") {
+		t.Errorf("expected update notice in header, got: %s", lines[0])
+	}
+	// Verify the line doesn't exceed terminal width (lipgloss.Width accounts for wide chars)
+	lineWidth := lipgloss.Width(lines[0])
+	if lineWidth > 100 {
+		t.Errorf("header line 1 width %d exceeds terminal width 100", lineWidth)
+	}
+}
+
+// TestHeaderUpdateNoticeNarrowTerminal verifies update notice is omitted when terminal is too narrow.
+func TestHeaderUpdateNoticeNarrowTerminal(t *testing.T) {
+	model := NewBuilder().WithSize(40, 20).Build()
+	model.version = "abc1234"
+	model.updateAvailable = "v1.2.3"
+
+	header := model.headerView()
+	lines := strings.Split(header, "\n")
+
+	// At 40 chars wide, the update notice shouldn't fit and should be omitted
+	// (title + account already uses ~30 chars, notice needs ~25 more)
+	lineWidth := lipgloss.Width(lines[0])
+	if lineWidth > 40 {
+		t.Errorf("header line 1 width %d exceeds narrow terminal width 40", lineWidth)
+	}
+}

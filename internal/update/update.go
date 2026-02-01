@@ -437,9 +437,12 @@ func extractChecksum(releaseBody, assetName string) string {
 		line = strings.TrimSpace(line)
 		// Parse as "checksum  filename" or "checksum filename" and compare filename exactly
 		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == assetName {
-			if match := re.FindString(fields[0]); match != "" {
-				return strings.ToLower(match)
+		if len(fields) >= 2 {
+			fname := strings.TrimPrefix(fields[1], "*") // sha256sum -b uses *filename
+			if fname == assetName {
+				if match := re.FindString(fields[0]); match != "" {
+					return strings.ToLower(match)
+				}
 			}
 		}
 	}
@@ -500,15 +503,22 @@ func isDevBuildVersion(v string) bool {
 	return gitDescribePattern.MatchString(v)
 }
 
-// hasPrerelease returns true if the version has a prerelease suffix (e.g. -rc1, -beta2).
+// prereleaseTag returns the prerelease suffix (e.g. "rc1", "beta2") or "" if none.
 // Git-describe versions (e.g. 0.4.0-5-gabcdef) are NOT considered prerelease — they're dev builds.
-func hasPrerelease(v string) bool {
+func prereleaseTag(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	idx := strings.Index(v, "-")
 	if idx < 0 {
-		return false
+		return ""
 	}
-	return !gitDescribePattern.MatchString(v)
+	if gitDescribePattern.MatchString(v) {
+		return ""
+	}
+	return v[idx+1:]
+}
+
+func hasPrerelease(v string) bool {
+	return prereleaseTag(v) != ""
 }
 
 // isNewer returns true if v1 is newer than v2 (semver comparison).
@@ -543,11 +553,14 @@ func isNewer(v1, v2 string) bool {
 		}
 	}
 
-	// Same base version: release > prerelease
-	pre1 := hasPrerelease(v1)
-	pre2 := hasPrerelease(v2)
-	if !pre1 && pre2 {
+	// Same base version: release > prerelease, and compare prerelease tags
+	tag1 := prereleaseTag(v1)
+	tag2 := prereleaseTag(v2)
+	if tag1 == "" && tag2 != "" {
 		return true // v1 is release, v2 is prerelease
+	}
+	if tag1 != "" && tag2 != "" {
+		return tag1 > tag2 // lexicographic: rc2 > rc1, beta2 > beta1
 	}
 
 	return false

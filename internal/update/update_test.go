@@ -178,6 +178,18 @@ func TestExtractChecksum(t *testing.T) {
 			assetName: "msgvault_darwin_arm64.tar.gz",
 			want:      "abc123def456789012345678901234567890123456789012345678901234bbbb",
 		},
+		{
+			name:      "binary mode star prefix",
+			body:      "abc123def456789012345678901234567890123456789012345678901234abcd *msgvault_darwin_arm64.tar.gz",
+			assetName: "msgvault_darwin_arm64.tar.gz",
+			want:      "abc123def456789012345678901234567890123456789012345678901234abcd",
+		},
+		{
+			name:      "trailing comment ignored",
+			body:      "abc123def456789012345678901234567890123456789012345678901234abcd  msgvault_darwin_arm64.tar.gz  # some comment",
+			assetName: "msgvault_darwin_arm64.tar.gz",
+			want:      "abc123def456789012345678901234567890123456789012345678901234abcd",
+		},
 	}
 
 	for _, tt := range tests {
@@ -270,7 +282,7 @@ func TestIsNewer(t *testing.T) {
 		{"0.5.0", "0.4.0-rc1", true},
 		{"0.4.0", "0.4.0-rc1", true},  // release > prerelease of same version
 		{"0.4.0-rc1", "0.4.0", false}, // prerelease is not newer than release
-		{"0.4.0-rc2", "0.4.0-rc1", false}, // same base, both prerelease
+		{"0.4.0-rc2", "0.4.0-rc1", true},  // rc2 > rc1
 		{"0.4.0-beta1", "0.3.9", true},    // prerelease of higher base > lower release
 	}
 
