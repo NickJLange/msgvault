@@ -521,6 +521,69 @@ func hasPrerelease(v string) bool {
 	return prereleaseTag(v) != ""
 }
 
+// comparePrerelease compares two prerelease tags using semver-like rules:
+// split on "." and non-alpha/digit boundaries, compare numeric segments numerically.
+// Returns -1, 0, or 1.
+func comparePrerelease(a, b string) int {
+	sa := splitPrerelease(a)
+	sb := splitPrerelease(b)
+	for i := 0; i < len(sa) || i < len(sb); i++ {
+		if i >= len(sa) {
+			return -1
+		}
+		if i >= len(sb) {
+			return 1
+		}
+		ai, aIsNum := parseNum(sa[i])
+		bi, bIsNum := parseNum(sb[i])
+		if aIsNum && bIsNum {
+			if ai != bi {
+				if ai < bi {
+					return -1
+				}
+				return 1
+			}
+			continue
+		}
+		// numeric < string in semver, but for our use (alpha1, beta1, rc1)
+		// string compare is fine when types match
+		if sa[i] < sb[i] {
+			return -1
+		}
+		if sa[i] > sb[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// splitPrerelease splits a prerelease string into segments on "." and
+// boundaries between alpha and numeric characters (e.g. "rc10" -> ["rc", "10"]).
+func splitPrerelease(s string) []string {
+	var parts []string
+	for _, dotPart := range strings.Split(s, ".") {
+		start := 0
+		for i := 1; i < len(dotPart); i++ {
+			prevDigit := dotPart[i-1] >= '0' && dotPart[i-1] <= '9'
+			curDigit := dotPart[i] >= '0' && dotPart[i] <= '9'
+			if prevDigit != curDigit {
+				parts = append(parts, dotPart[start:i])
+				start = i
+			}
+		}
+		parts = append(parts, dotPart[start:])
+	}
+	return parts
+}
+
+func parseNum(s string) (int, bool) {
+	var n int
+	if _, err := fmt.Sscanf(s, "%d", &n); err == nil && fmt.Sprintf("%d", n) == s {
+		return n, true
+	}
+	return 0, false
+}
+
 // isNewer returns true if v1 is newer than v2 (semver comparison).
 // Prerelease versions (e.g. -rc1) are considered older than the same base version.
 func isNewer(v1, v2 string) bool {
@@ -560,7 +623,7 @@ func isNewer(v1, v2 string) bool {
 		return true // v1 is release, v2 is prerelease
 	}
 	if tag1 != "" && tag2 != "" {
-		return tag1 > tag2 // lexicographic: rc2 > rc1, beta2 > beta1
+		return comparePrerelease(tag1, tag2) > 0
 	}
 
 	return false

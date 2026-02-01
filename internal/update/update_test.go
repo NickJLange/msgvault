@@ -282,8 +282,14 @@ func TestIsNewer(t *testing.T) {
 		{"0.5.0", "0.4.0-rc1", true},
 		{"0.4.0", "0.4.0-rc1", true},  // release > prerelease of same version
 		{"0.4.0-rc1", "0.4.0", false}, // prerelease is not newer than release
-		{"0.4.0-rc2", "0.4.0-rc1", true},  // rc2 > rc1
-		{"0.4.0-beta1", "0.3.9", true},    // prerelease of higher base > lower release
+		{"0.4.0-rc2", "0.4.0-rc1", true},    // rc2 > rc1
+		{"0.4.0-rc10", "0.4.0-rc2", true},   // numeric comparison: 10 > 2
+		{"0.4.0-rc2", "0.4.0-rc10", false},  // numeric comparison: 2 < 10
+		{"0.4.0-beta10", "0.4.0-beta2", true}, // beta10 > beta2
+		{"0.4.0-rc1", "0.4.0-beta1", true},  // rc > beta lexicographically
+		{"0.4.0-alpha1", "0.4.0-beta1", false}, // alpha < beta
+		{"0.4.0-rc.2", "0.4.0-rc.1", true},  // dotted prerelease
+		{"0.4.0-beta1", "0.3.9", true},      // prerelease of higher base > lower release
 	}
 
 	for _, tt := range tests {
