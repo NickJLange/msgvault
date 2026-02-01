@@ -166,6 +166,18 @@ func TestExtractChecksum(t *testing.T) {
 			assetName: "msgvault_darwin_arm64.tar.gz",
 			want:      "",
 		},
+		{
+			name:      "substring filename should not match",
+			body:      "abc123def456789012345678901234567890123456789012345678901234abcd  msgvault_darwin_arm64.tar.gz.sig",
+			assetName: "msgvault_darwin_arm64.tar.gz",
+			want:      "",
+		},
+		{
+			name:      "exact match with superset also present",
+			body:      "abc123def456789012345678901234567890123456789012345678901234aaaa  msgvault_darwin_arm64.tar.gz.sig\nabc123def456789012345678901234567890123456789012345678901234bbbb  msgvault_darwin_arm64.tar.gz",
+			assetName: "msgvault_darwin_arm64.tar.gz",
+			want:      "abc123def456789012345678901234567890123456789012345678901234bbbb",
+		},
 	}
 
 	for _, tt := range tests {
@@ -256,7 +268,10 @@ func TestIsNewer(t *testing.T) {
 		{"0.4.1", "0.4.0-5-gabcdef", true},
 		{"0.3.0", "0.4.0-5-gabcdef", false},
 		{"0.5.0", "0.4.0-rc1", true},
-		{"0.4.0", "0.4.0-rc1", false},
+		{"0.4.0", "0.4.0-rc1", true},  // release > prerelease of same version
+		{"0.4.0-rc1", "0.4.0", false}, // prerelease is not newer than release
+		{"0.4.0-rc2", "0.4.0-rc1", false}, // same base, both prerelease
+		{"0.4.0-beta1", "0.3.9", true},    // prerelease of higher base > lower release
 	}
 
 	for _, tt := range tests {

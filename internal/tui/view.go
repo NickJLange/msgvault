@@ -287,7 +287,7 @@ func (m Model) headerView() string {
 	// Build line 1: "msgvault [hash] - Account          update: vX.Y.Z"
 	line1Content := fmt.Sprintf("%s - %s", titleText, accountStr)
 	if updateNotice != "" {
-		gap := m.width - 2 - len(line1Content) - len(updateNotice)
+		gap := m.width - 2 - lipgloss.Width(line1Content) - lipgloss.Width(updateNotice)
 		if gap > 1 {
 			line1Content += strings.Repeat(" ", gap) + updateNotice
 		}
