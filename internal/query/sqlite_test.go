@@ -2493,3 +2493,32 @@ func TestSubAggregate_RecipientName_WithRecipient(t *testing.T) {
 		t.Errorf("expected sender alice@example.com, got %s", rows[0].Key)
 	}
 }
+
+// TestRecipientAndRecipientNameAndMatchEmptyRecipient verifies that the triple
+// combination Recipient+RecipientName+MatchEmptyRecipient does not cause a
+// duplicate-alias SQL error. When Recipient is set, MatchEmptyRecipient is
+// ignored (they are in else-if branches), so the query should work normally.
+func TestRecipientAndRecipientNameAndMatchEmptyRecipient(t *testing.T) {
+	env := newTestEnv(t)
+
+	filter := MessageFilter{
+		Recipient:           "bob@company.org",
+		RecipientName:       "Bob Jones",
+		MatchEmptyRecipient: true,
+	}
+
+	// ListMessages
+	messages := env.MustListMessages(filter)
+	if len(messages) != 3 {
+		t.Errorf("ListMessages: expected 3 messages, got %d", len(messages))
+	}
+
+	// SubAggregate (buildFilterJoinsAndConditions)
+	rows, err := env.Engine.SubAggregate(env.Ctx, filter, ViewSenders, AggregateOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("SubAggregate: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Key != "alice@example.com" {
+		t.Errorf("SubAggregate: unexpected rows: %v", rows)
+	}
+}

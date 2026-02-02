@@ -2295,3 +2295,62 @@ func TestDuckDBEngine_ListMessages_MatchEmptyRecipientName(t *testing.T) {
 		t.Errorf("expected 'No Recipient', got %q", results[0].Subject)
 	}
 }
+
+func TestDuckDBEngine_GetTotalStats_GroupByRecipients(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("skipping DuckDB test on Linux CI")
+	}
+	engine := newParquetEngine(t)
+
+	// Search "bob" with GroupBy=ViewRecipients should search recipient key columns.
+	// Bob is a recipient (to) on msgs 1,2,3 — searching "bob" should match those.
+	stats, err := engine.GetTotalStats(context.Background(), StatsOptions{
+		SearchQuery: "bob",
+		GroupBy:     ViewRecipients,
+	})
+	if err != nil {
+		t.Fatalf("GetTotalStats: %v", err)
+	}
+	if stats.MessageCount != 3 {
+		t.Errorf("expected 3 messages for recipient search 'bob', got %d", stats.MessageCount)
+	}
+}
+
+func TestDuckDBEngine_GetTotalStats_GroupByLabels(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("skipping DuckDB test on Linux CI")
+	}
+	engine := newParquetEngine(t)
+
+	// Search "work" with GroupBy=ViewLabels should search label key columns.
+	// "Work" label is on msgs 1,4.
+	stats, err := engine.GetTotalStats(context.Background(), StatsOptions{
+		SearchQuery: "work",
+		GroupBy:     ViewLabels,
+	})
+	if err != nil {
+		t.Fatalf("GetTotalStats: %v", err)
+	}
+	if stats.MessageCount != 2 {
+		t.Errorf("expected 2 messages for label search 'work', got %d", stats.MessageCount)
+	}
+}
+
+func TestDuckDBEngine_GetTotalStats_GroupByDefault(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("skipping DuckDB test on Linux CI")
+	}
+	engine := newParquetEngine(t)
+
+	// Search "alice" with default GroupBy (senders) should search subject+sender.
+	// Alice is sender on msgs 1,2,3.
+	stats, err := engine.GetTotalStats(context.Background(), StatsOptions{
+		SearchQuery: "alice",
+	})
+	if err != nil {
+		t.Fatalf("GetTotalStats: %v", err)
+	}
+	if stats.MessageCount != 3 {
+		t.Errorf("expected 3 messages for sender search 'alice', got %d", stats.MessageCount)
+	}
+}

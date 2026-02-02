@@ -5795,3 +5795,51 @@ func TestTKeyNoOpInSubAggregateWhenDrillIsTime(t *testing.T) {
 		t.Error("expected loading=false (no-op)")
 	}
 }
+
+// TestLoadDataSetsGroupByInStatsOpts verifies that loadData passes the current
+// viewType as GroupBy in StatsOptions when search is active. This ensures the
+// DuckDB engine searches the correct key columns for 1:N views.
+func TestLoadDataSetsGroupByInStatsOpts(t *testing.T) {
+	engine := &trackingMockEngine{
+		mockEngine: mockEngine{
+			rows: []query.AggregateRow{
+				{Key: "bob@example.com", Count: 10, TotalSize: 5000},
+			},
+		},
+		contextStats: &query.TotalStats{MessageCount: 10, TotalSize: 5000},
+	}
+
+	model := New(engine, Options{DataDir: "/tmp/test", Version: "test123"})
+	model.viewType = query.ViewRecipients
+	model.searchQuery = "bob"
+	model.level = levelAggregates
+	model.width = 100
+	model.height = 20
+
+	// Execute the loadData command synchronously
+	cmd := model.loadData()
+	if cmd == nil {
+		t.Fatal("expected loadData to return a command")
+	}
+	msg := cmd()
+
+	// The command should have called GetTotalStats with GroupBy=ViewRecipients
+	if engine.statsCallCount == 0 {
+		t.Fatal("expected GetTotalStats to be called during loadData with search active")
+	}
+	if engine.lastStatsOpts.GroupBy != query.ViewRecipients {
+		t.Errorf("expected StatsOptions.GroupBy=ViewRecipients, got %v", engine.lastStatsOpts.GroupBy)
+	}
+	if engine.lastStatsOpts.SearchQuery != "bob" {
+		t.Errorf("expected StatsOptions.SearchQuery='bob', got %q", engine.lastStatsOpts.SearchQuery)
+	}
+
+	// Verify the result contains filteredStats
+	dlm, ok := msg.(dataLoadedMsg)
+	if !ok {
+		t.Fatalf("expected dataLoadedMsg, got %T", msg)
+	}
+	if dlm.filteredStats == nil {
+		t.Error("expected filteredStats to be set")
+	}
+}
