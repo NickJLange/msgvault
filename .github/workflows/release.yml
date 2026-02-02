@@ -22,13 +22,13 @@ jobs:
             go_arch_name: arm64
     runs-on: ${{ matrix.runner }}
     container:
-      image: rockylinux:8
+      image: rockylinux:9
 
     steps:
       - name: Install build tools
         run: |
           dnf install -y dnf-plugins-core
-          dnf config-manager --set-enabled powertools || dnf config-manager --set-enabled crb || true
+          dnf config-manager --set-enabled crb || true
           dnf install -y gcc gcc-c++ make git tar gzip file libstdc++-static
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
