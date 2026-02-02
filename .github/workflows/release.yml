@@ -22,14 +22,15 @@ jobs:
             go_arch_name: arm64
     runs-on: ${{ matrix.runner }}
     container:
-      image: rockylinux:9
+      image: ubuntu:20.04
 
     steps:
       - name: Install build tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          dnf install -y dnf-plugins-core
-          dnf config-manager --set-enabled crb || true
-          dnf install -y gcc gcc-c++ make git tar gzip file libstdc++-static
+          apt-get update
+          apt-get install -y gcc g++ make git curl tar gzip file
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
