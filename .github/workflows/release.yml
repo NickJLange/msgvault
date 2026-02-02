@@ -165,12 +165,19 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Set up MinGW
+        uses: msys2/setup-msys2@d40200dc2f5f4942b8ceff329b5499042d157699 # v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+
       - name: Build
         shell: pwsh
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: '1'
+          CC: D:\a\_temp\msys64\mingw64\bin\gcc.exe
         run: |
           $VERSION = "${{ github.ref_name }}".TrimStart("v")
 
@@ -179,9 +186,11 @@ jobs:
           go build -tags fts5 -trimpath -ldflags="$LDFLAGS" -o dist/msgvault.exe ./cmd/msgvault
           if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 
-          # Smoke test
+          # Smoke test — check exit code explicitly, then verify version string
           Write-Host "--- Smoke test ---"
-          $SMOKE_OUT = & dist/msgvault.exe version 2>&1 | Out-String
+          & dist/msgvault.exe version 2>&1 | Tee-Object -Variable SMOKE_OUT | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "FATAL: msgvault.exe version exited with code $LASTEXITCODE" }
+          $SMOKE_OUT = $SMOKE_OUT | Out-String
           Write-Host $SMOKE_OUT
           if ($SMOKE_OUT -notmatch "v${VERSION}") { throw "FATAL: version output doesn't match tag" }
 
