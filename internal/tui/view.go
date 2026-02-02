@@ -1413,33 +1413,59 @@ func (m Model) overlayModal(background string) string {
 		modalContent += "\n[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
 
 	case modalHelp:
-		modalContent = modalTitleStyle.Render("Keyboard Shortcuts") + "\n\n"
-		modalContent += "Navigation\n"
-		modalContent += "  ↑/k, ↓/j    Move cursor up/down\n"
-		modalContent += "  ←/h, →/l    Prev/next message (in detail view)\n"
-		modalContent += "  PgUp/PgDn   Page up/down\n"
-		modalContent += "  Home/End    Go to first/last\n"
-		modalContent += "  Enter       Drill down\n"
-		modalContent += "  Esc         Go back\n\n"
-		modalContent += "Views & Sorting\n"
-		modalContent += "  g/Tab       Cycle view types\n"
-	modalContent += "  t           Jump to Time view (cycle granularity when in Time)\n"
-		modalContent += "  s           Cycle sort field\n"
-		modalContent += "  v/r         Reverse sort order\n"
-		modalContent += "  t           Cycle time granularity (Year/Month/Day)\n\n"
-		modalContent += "Selection & Actions\n"
-		modalContent += "  Space       Toggle selection\n"
-		modalContent += "  S           Select all visible\n"
-		modalContent += "  x           Clear selection\n"
-		modalContent += "  d/D         Stage for deletion\n"
-		modalContent += "  a           View all messages\n\n"
-		modalContent += "Other\n"
-		modalContent += "  /           Search\n"
-		modalContent += "  A           Select account\n"
-		modalContent += "  f           Filter by attachments\n"
-		modalContent += "  e           Export attachments (in message view)\n"
-		modalContent += "  q           Quit\n\n"
-		modalContent += "Press any key to close"
+		var helpLines []string
+		helpLines = append(helpLines, modalTitleStyle.Render("Keyboard Shortcuts"))
+		helpLines = append(helpLines, "")
+		helpLines = append(helpLines, "Navigation")
+		helpLines = append(helpLines, "  ↑/k, ↓/j    Move cursor up/down")
+		helpLines = append(helpLines, "  ←/h, →/l    Prev/next message (in detail view)")
+		helpLines = append(helpLines, "  PgUp/PgDn   Page up/down")
+		helpLines = append(helpLines, "  Home/End    Go to first/last")
+		helpLines = append(helpLines, "  Enter       Drill down")
+		helpLines = append(helpLines, "  Esc         Go back")
+		helpLines = append(helpLines, "")
+		helpLines = append(helpLines, "Views & Sorting")
+		helpLines = append(helpLines, "  g/Tab       Cycle view types")
+		helpLines = append(helpLines, "  t           Jump to Time view (cycle granularity when in Time)")
+		helpLines = append(helpLines, "  s           Cycle sort field")
+		helpLines = append(helpLines, "  v/r         Reverse sort order")
+		helpLines = append(helpLines, "")
+		helpLines = append(helpLines, "Selection & Actions")
+		helpLines = append(helpLines, "  Space       Toggle selection")
+		helpLines = append(helpLines, "  S           Select all visible")
+		helpLines = append(helpLines, "  x           Clear selection")
+		helpLines = append(helpLines, "  d/D         Stage for deletion")
+		helpLines = append(helpLines, "  a           View all messages")
+		helpLines = append(helpLines, "")
+		helpLines = append(helpLines, "Other")
+		helpLines = append(helpLines, "  /           Search")
+		helpLines = append(helpLines, "  A           Select account")
+		helpLines = append(helpLines, "  f           Filter by attachments")
+		helpLines = append(helpLines, "  e           Export attachments (in message view)")
+		helpLines = append(helpLines, "  q           Quit")
+		helpLines = append(helpLines, "")
+		helpLines = append(helpLines, "[↑/↓] Scroll  [Any other key] Close")
+
+		// Scrollable window: leave room for modal border/padding
+		maxVisible := m.height - 6
+		if maxVisible < 5 {
+			maxVisible = 5
+		}
+		if maxVisible > len(helpLines) {
+			maxVisible = len(helpLines)
+		}
+
+		// Clamp scroll offset
+		maxScroll := len(helpLines) - maxVisible
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.helpScroll > maxScroll {
+			m.helpScroll = maxScroll
+		}
+
+		visible := helpLines[m.helpScroll : m.helpScroll+maxVisible]
+		modalContent = strings.Join(visible, "\n")
 
 	case modalExportAttachments:
 		modalContent = modalTitleStyle.Render("Export Attachments") + "\n\n"

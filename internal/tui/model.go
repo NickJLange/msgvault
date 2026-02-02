@@ -115,6 +115,7 @@ type Model struct {
 	modal           modalType
 	modalCursor     int                // Cursor position within modal (for selector modals)
 	modalResult     string             // Result message to display
+	helpScroll      int                // Scroll offset for help modal
 	pendingManifest *deletion.Manifest // Manifest being confirmed
 
 	// Action controller (deletion, export)

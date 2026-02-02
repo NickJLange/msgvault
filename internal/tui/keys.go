@@ -1048,8 +1048,25 @@ func (m Model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modalResult = ""
 
 	case modalHelp:
-		// Any key closes help
-		m.modal = modalNone
+		switch msg.String() {
+		case "down", "j":
+			m.helpScroll++
+		case "up", "k":
+			if m.helpScroll > 0 {
+				m.helpScroll--
+			}
+		case "pgdown":
+			m.helpScroll += 10
+		case "pgup":
+			m.helpScroll -= 10
+			if m.helpScroll < 0 {
+				m.helpScroll = 0
+			}
+		default:
+			// Any other key closes help
+			m.modal = modalNone
+			m.helpScroll = 0
+		}
 	}
 
 	return m, nil
