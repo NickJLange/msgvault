@@ -17,7 +17,8 @@ type Config struct {
 	Sync  SyncConfig  `toml:"sync"`
 
 	// Computed paths (not from config file)
-	HomeDir string `toml:"-"`
+	HomeDir    string `toml:"-"`
+	configPath string // resolved path to the loaded config file
 }
 
 // DataConfig holds data storage configuration.
@@ -37,10 +38,10 @@ type SyncConfig struct {
 }
 
 // DefaultHome returns the default msgvault home directory.
-// Respects MSGVAULT_HOME environment variable.
+// Respects MSGVAULT_HOME environment variable and expands ~ in its value.
 func DefaultHome() string {
 	if h := os.Getenv("MSGVAULT_HOME"); h != "" {
-		return h
+		return expandPath(h)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -64,17 +65,38 @@ func NewDefaultConfig() *Config {
 }
 
 // Load reads the configuration from the specified file.
-// If path is empty, uses the default location (~/.msgvault/config.toml).
+// If path is empty, uses the default location (~/.msgvault/config.toml),
+// which is optional (missing file returns defaults).
+// If path is explicitly provided, the file must exist.
 func Load(path string) (*Config, error) {
+	explicit := path != ""
+
 	cfg := NewDefaultConfig()
 
-	if path == "" {
+	if !explicit {
 		path = filepath.Join(cfg.HomeDir, "config.toml")
+	} else {
+		// Expand ~ for explicit paths (e.g. --config "~/.msgvault/config.toml"
+		// where the shell didn't expand it, or on Windows where ~ is never expanded).
+		path = expandPath(path)
 	}
 
-	// Config file is optional - use defaults if not present
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if explicit {
+			return nil, fmt.Errorf("config file not found: %s", path)
+		}
+		// Default config file is optional
 		return cfg, nil
+	}
+
+	cfg.configPath = path
+
+	// When --config points to a custom location, derive HomeDir and
+	// default DataDir from the config file's parent directory so that
+	// tokens, database, attachments, etc. live alongside the config.
+	if explicit {
+		cfg.HomeDir = filepath.Dir(path)
+		cfg.Data.DataDir = cfg.HomeDir
 	}
 
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
@@ -84,6 +106,13 @@ func Load(path string) (*Config, error) {
 	// Expand ~ in paths
 	cfg.Data.DataDir = expandPath(cfg.Data.DataDir)
 	cfg.OAuth.ClientSecrets = expandPath(cfg.OAuth.ClientSecrets)
+
+	// When --config is used, resolve relative paths against the config file's
+	// directory so behavior doesn't depend on the working directory.
+	if explicit {
+		cfg.Data.DataDir = resolveRelative(cfg.Data.DataDir, cfg.HomeDir)
+		cfg.OAuth.ClientSecrets = resolveRelative(cfg.OAuth.ClientSecrets, cfg.HomeDir)
+	}
 
 	return cfg, nil
 }
@@ -109,6 +138,30 @@ func (c *Config) TokensDir() string {
 // AnalyticsDir returns the path to the Parquet analytics directory.
 func (c *Config) AnalyticsDir() string {
 	return filepath.Join(c.Data.DataDir, "analytics")
+}
+
+// EnsureHomeDir creates the msgvault home directory if it doesn't exist.
+func (c *Config) EnsureHomeDir() error {
+	return os.MkdirAll(c.HomeDir, 0700)
+}
+
+// ConfigFilePath returns the path to the config file.
+// If a config was loaded (including via --config), returns the actual path used.
+// Otherwise returns the default location based on HomeDir.
+func (c *Config) ConfigFilePath() string {
+	if c.configPath != "" {
+		return c.configPath
+	}
+	return filepath.Join(c.HomeDir, "config.toml")
+}
+
+// resolveRelative makes a relative path absolute by joining it with base.
+// Absolute paths and empty strings are returned unchanged.
+func resolveRelative(path, base string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
 }
 
 // expandPath expands ~ to the user's home directory.
