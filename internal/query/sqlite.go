@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"sync"
 
@@ -892,58 +893,98 @@ func (e *SQLiteEngine) ListAccounts(ctx context.Context) ([]AccountInfo, error) 
 func (e *SQLiteEngine) GetTotalStats(ctx context.Context, opts StatsOptions) (*TotalStats, error) {
 	stats := &TotalStats{}
 
-	// Build WHERE clause for messages
+	// Build search conditions when SearchQuery is set.
+	var searchConditions []string
+	var searchArgs []interface{}
+	var searchJoins []string
+	var searchFTSJoin string
+	if opts.SearchQuery != "" {
+		q := search.Parse(opts.SearchQuery)
+		searchConditions, searchArgs, searchJoins, searchFTSJoin = e.buildSearchQueryParts(ctx, q)
+	}
+
+	// Build WHERE clause for messages — always use m. prefix since we alias
+	// the messages table for compatibility with search joins.
 	var conditions []string
 	var args []interface{}
 	// Include all messages (deleted messages shown with indicator in TUI)
 	if opts.SourceID != nil {
-		conditions = append(conditions, "source_id = ?")
+		conditions = append(conditions, "m.source_id = ?")
 		args = append(args, *opts.SourceID)
 	}
 	if opts.WithAttachmentsOnly {
-		conditions = append(conditions, "has_attachments = 1")
+		conditions = append(conditions, "m.has_attachments = 1")
 	}
-	whereClause := ""
+	// Merge search conditions
+	conditions = append(conditions, searchConditions...)
+	args = append(args, searchArgs...)
+
+	whereClause := "1=1"
 	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+		whereClause = strings.Join(conditions, " AND ")
 	}
 
-	// Message stats
-	msgQuery := fmt.Sprintf(`
-		SELECT
-			COUNT(*),
-			COALESCE(SUM(size_estimate), 0)
-		FROM messages
-		%s
-	`, whereClause)
+	// Build join clause for search
+	joinClause := ""
+	if searchFTSJoin != "" {
+		joinClause += searchFTSJoin + "\n"
+	}
+	if len(searchJoins) > 0 {
+		joinClause += strings.Join(searchJoins, "\n")
+	}
+
+	// Message stats — when search joins are present, use a subquery to get
+	// distinct matching IDs first, avoiding duplicates from 1:N joins.
+	var msgQuery string
+	if joinClause != "" {
+		msgQuery = fmt.Sprintf(`
+			SELECT
+				COUNT(*),
+				COALESCE(SUM(size_estimate), 0)
+			FROM messages
+			WHERE id IN (
+				SELECT DISTINCT m.id FROM messages m
+				%s
+				WHERE %s
+			)
+		`, joinClause, whereClause)
+	} else {
+		msgQuery = fmt.Sprintf(`
+			SELECT
+				COUNT(*),
+				COALESCE(SUM(size_estimate), 0)
+			FROM messages m
+			WHERE %s
+		`, whereClause)
+	}
 
 	if err := e.db.QueryRowContext(ctx, msgQuery, args...).Scan(&stats.MessageCount, &stats.TotalSize); err != nil {
 		return nil, fmt.Errorf("message stats: %w", err)
 	}
 
-	// Attachment stats - need to join with messages for source/attachment filtering
-	var attConditions []string
-	var attArgs []interface{}
-	// Include all messages (deleted messages shown with indicator in TUI)
-	if opts.SourceID != nil {
-		attConditions = append(attConditions, "m.source_id = ?")
-		attArgs = append(attArgs, *opts.SourceID)
+	// Attachment stats — use IN subquery only when search joins are present
+	// (to de-duplicate 1:N join rows). Without joins, a direct query is faster.
+	var attQuery string
+	if joinClause != "" {
+		attQuery = fmt.Sprintf(`
+			SELECT COUNT(*), COALESCE(SUM(a.size), 0)
+			FROM attachments a
+			WHERE a.message_id IN (
+				SELECT DISTINCT m.id FROM messages m
+				%s
+				WHERE %s
+			)
+		`, joinClause, whereClause)
+	} else {
+		attQuery = fmt.Sprintf(`
+			SELECT COUNT(*), COALESCE(SUM(a.size), 0)
+			FROM attachments a
+			JOIN messages m ON m.id = a.message_id
+			WHERE %s
+		`, whereClause)
 	}
-	if opts.WithAttachmentsOnly {
-		attConditions = append(attConditions, "m.has_attachments = 1")
-	}
-	attWhereClause := "1=1"
-	if len(attConditions) > 0 {
-		attWhereClause = strings.Join(attConditions, " AND ")
-	}
-	attQuery := fmt.Sprintf(`
-		SELECT COUNT(*), COALESCE(SUM(a.size), 0)
-		FROM attachments a
-		JOIN messages m ON m.id = a.message_id
-		WHERE %s
-	`, attWhereClause)
 
-	if err := e.db.QueryRowContext(ctx, attQuery, attArgs...).Scan(&stats.AttachmentCount, &stats.AttachmentSize); err != nil {
+	if err := e.db.QueryRowContext(ctx, attQuery, args...).Scan(&stats.AttachmentCount, &stats.AttachmentSize); err != nil {
 		return nil, fmt.Errorf("attachment stats: %w", err)
 	}
 
@@ -1469,4 +1510,37 @@ func (e *SQLiteEngine) SearchFastCount(ctx context.Context, q *search.Query, fil
 		return 0, fmt.Errorf("search fast count: %w", err)
 	}
 	return count, nil
+}
+
+// SearchFastWithStats delegates to SearchFast + SearchFastCount + GetTotalStats.
+// SQLite doesn't benefit from temp table materialization, so we just call the
+// existing methods independently.
+func (e *SQLiteEngine) SearchFastWithStats(ctx context.Context, q *search.Query, queryStr string,
+	filter MessageFilter, statsGroupBy ViewType, limit, offset int) (*SearchFastResult, error) {
+
+	results, err := e.SearchFast(ctx, q, filter, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+
+	// Best-effort count: don't abort the search if count fails.
+	count, countErr := e.SearchFastCount(ctx, q, filter)
+	if countErr != nil {
+		log.Printf("warning: search count failed (using -1): %v", countErr)
+		count = -1
+	}
+
+	statsOpts := StatsOptions{
+		SourceID:            filter.SourceID,
+		WithAttachmentsOnly: filter.WithAttachmentsOnly,
+		SearchQuery:         queryStr,
+		GroupBy:             statsGroupBy,
+	}
+	stats, _ := e.GetTotalStats(ctx, statsOpts)
+
+	return &SearchFastResult{
+		Messages:   results,
+		TotalCount: count,
+		Stats:      stats,
+	}, nil
 }
