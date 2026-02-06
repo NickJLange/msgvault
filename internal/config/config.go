@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -237,9 +238,19 @@ func resolveRelative(path, base string) string {
 
 // expandPath expands ~ to the user's home directory.
 // Only expands paths that are exactly "~" or start with "~/".
+// It also strips surrounding single or double quotes, which Windows CMD
+// passes through literally (unlike Unix shells which strip them).
 func expandPath(path string) string {
 	if path == "" {
 		return path
+	}
+	// Strip surrounding quotes left by Windows CMD (e.g. --home 'C:\Users\foo').
+	// Only on Windows — Unix shells strip quotes before the process sees them,
+	// and literal quote characters in Unix paths are valid (if unusual).
+	if runtime.GOOS == "windows" && len(path) >= 2 &&
+		((path[0] == '\'' && path[len(path)-1] == '\'') ||
+			(path[0] == '"' && path[len(path)-1] == '"')) {
+		path = path[1 : len(path)-1]
 	}
 	if path == "~" || strings.HasPrefix(path, "~"+string(os.PathSeparator)) || strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
