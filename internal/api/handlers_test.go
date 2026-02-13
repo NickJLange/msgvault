@@ -5,6 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -367,5 +370,367 @@ func TestMessageSummaryNilSlices(t *testing.T) {
 	}
 	if len(labels) != 0 {
 		t.Errorf("expected empty 'labels' array, got %v", labels)
+	}
+}
+
+func TestHandleUploadToken(t *testing.T) {
+	// Create temp directory for tokens
+	tmpDir, err := os.MkdirTemp("", "msgvault-test-tokens-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{APIPort: 8080},
+		Data:   config.DataConfig{DataDir: tmpDir},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	tokenJSON := `{
+		"access_token": "ya29.test",
+		"token_type": "Bearer",
+		"refresh_token": "1//test-refresh-token",
+		"expiry": "2024-12-31T23:59:59Z"
+	}`
+
+	req := httptest.NewRequest("POST", "/api/v1/auth/token/test@gmail.com", strings.NewReader(tokenJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status = %d, want %d, body: %s", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	// Verify token file was created
+	tokenPath := filepath.Join(tmpDir, "tokens", "test@gmail.com.json")
+	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+		t.Errorf("token file was not created at %s", tokenPath)
+	}
+}
+
+func TestHandleUploadTokenInvalidJSON(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "msgvault-test-tokens-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{APIPort: 8080},
+		Data:   config.DataConfig{DataDir: tmpDir},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	req := httptest.NewRequest("POST", "/api/v1/auth/token/test@gmail.com", strings.NewReader("not valid json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+
+	var resp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if resp.Error != "invalid_json" {
+		t.Errorf("error = %q, want 'invalid_json'", resp.Error)
+	}
+}
+
+func TestHandleUploadTokenMissingRefreshToken(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "msgvault-test-tokens-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{APIPort: 8080},
+		Data:   config.DataConfig{DataDir: tmpDir},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	// Token without refresh_token
+	tokenJSON := `{
+		"access_token": "ya29.test",
+		"token_type": "Bearer"
+	}`
+
+	req := httptest.NewRequest("POST", "/api/v1/auth/token/test@gmail.com", strings.NewReader(tokenJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+
+	var resp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if resp.Error != "invalid_token" {
+		t.Errorf("error = %q, want 'invalid_token'", resp.Error)
+	}
+}
+
+func TestHandleUploadTokenInvalidEmail(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{APIPort: 8080},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	tokenJSON := `{"refresh_token": "test"}`
+
+	tests := []struct {
+		name  string
+		email string
+	}{
+		{"no at sign", "testgmail.com"},
+		{"no domain", "test@"},
+		{"no dot", "test@gmailcom"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/v1/auth/token/"+tc.email, strings.NewReader(tokenJSON))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			srv.Router().ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d for email %q", w.Code, http.StatusBadRequest, tc.email)
+			}
+		})
+	}
+}
+
+func TestHandleUploadTokenMissingEmail(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{APIPort: 8080},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	// Request without email in path - should 404 since route doesn't match
+	req := httptest.NewRequest("POST", "/api/v1/auth/token/", strings.NewReader("{}"))
+	w := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(w, req)
+
+	// Chi router will 404 on missing path parameter
+	if w.Code != http.StatusNotFound && w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 404 or 400", w.Code)
+	}
+}
+
+func TestHandleAddAccount(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "msgvault-test-config-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Server:  config.ServerConfig{APIPort: 8080},
+		HomeDir: tmpDir,
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	body := `{"email": "new@gmail.com", "schedule": "0 3 * * *"}`
+	req := httptest.NewRequest("POST", "/api/v1/accounts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	// Verify account was added to config
+	if len(cfg.Accounts) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(cfg.Accounts))
+	}
+	if cfg.Accounts[0].Email != "new@gmail.com" {
+		t.Errorf("email = %q, want 'new@gmail.com'", cfg.Accounts[0].Email)
+	}
+
+	// Verify scheduler was notified
+	if len(sched.addedAccts) != 1 || sched.addedAccts[0] != "new@gmail.com" {
+		t.Errorf("scheduler.AddAccount not called, addedAccts = %v", sched.addedAccts)
+	}
+}
+
+func TestHandleAddAccountDuplicate(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{APIPort: 8080},
+		Accounts: []config.AccountSchedule{
+			{Email: "existing@gmail.com", Schedule: "0 2 * * *", Enabled: true},
+		},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	body := `{"email": "existing@gmail.com"}`
+	req := httptest.NewRequest("POST", "/api/v1/accounts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "exists" {
+		t.Errorf("status = %q, want 'exists'", resp["status"])
+	}
+}
+
+func TestHandleAddAccountInvalidCron(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{APIPort: 8080},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	body := `{"email": "new@gmail.com", "schedule": "not a cron"}`
+	req := httptest.NewRequest("POST", "/api/v1/accounts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d, body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+
+	var resp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error != "invalid_schedule" {
+		t.Errorf("error = %q, want 'invalid_schedule'", resp.Error)
+	}
+}
+
+func TestHandleAddAccountInvalidEmail(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{APIPort: 8080},
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	tests := []struct {
+		name string
+		body string
+		code int
+	}{
+		{"empty email", `{"email": ""}`, http.StatusBadRequest},
+		{"no at sign", `{"email": "nope"}`, http.StatusBadRequest},
+		{"no dot", `{"email": "nope@nope"}`, http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/v1/accounts", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.Router().ServeHTTP(w, req)
+
+			if w.Code != tt.code {
+				t.Errorf("status = %d, want %d", w.Code, tt.code)
+			}
+		})
+	}
+}
+
+func TestHandleAddAccountSaveFailure(t *testing.T) {
+	// Point HomeDir to a file (not a directory) so Save() fails
+	tmpFile := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(tmpFile, []byte("x"), 0600); err != nil {
+		t.Fatalf("create blocker file: %v", err)
+	}
+
+	cfg := &config.Config{
+		Server:  config.ServerConfig{APIPort: 8080},
+		HomeDir: tmpFile, // Save() will fail: can't mkdir inside a file
+	}
+	sched := newMockScheduler()
+	srv := NewServer(cfg, nil, sched, testLogger())
+
+	body := `{"email": "fail@gmail.com", "schedule": "0 2 * * *"}`
+	req := httptest.NewRequest("POST", "/api/v1/accounts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+
+	// In-memory state should be rolled back
+	if len(cfg.Accounts) != 0 {
+		t.Errorf("cfg.Accounts has %d entries, want 0 (rollback failed)", len(cfg.Accounts))
+	}
+}
+
+func TestSanitizeTokenPath(t *testing.T) {
+	tokensDir := "/data/tokens"
+
+	tests := []struct {
+		name  string
+		email string
+	}{
+		{"normal email", "user@gmail.com"},
+		{"email with plus", "user+tag@gmail.com"},
+		{"email with dots", "first.last@gmail.com"},
+		{"path traversal attempt", "../../../etc/passwd"},
+		{"slash in email", "user/evil@gmail.com"},
+		{"backslash in email", "user\\evil@gmail.com"},
+		{"null byte", "user\x00evil@gmail.com"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := sanitizeTokenPath(tokensDir, tc.email)
+
+			// Result must be within tokensDir (path traversal prevention)
+			cleanResult := filepath.Clean(result)
+			cleanTokensDir := filepath.Clean(tokensDir)
+			if !strings.HasPrefix(cleanResult, cleanTokensDir+string(os.PathSeparator)) {
+				t.Errorf("path %q escapes tokensDir %q", result, tokensDir)
+			}
+
+			// Result must end with .json
+			if !strings.HasSuffix(result, ".json") {
+				t.Errorf("path %q doesn't end with .json", result)
+			}
+
+			// Result must not contain path separators in the filename
+			base := filepath.Base(result)
+			if strings.ContainsAny(base, "/\\") {
+				t.Errorf("filename %q contains path separators", base)
+			}
+		})
 	}
 }

@@ -1,7 +1,7 @@
 display_name = "msgvault"
 
 review_guidelines = """
-We are using the latest production version of Go
+We are using the latest production version of Go.
 Please be pragmatic about reviews, raising theoretical or highly
 pedantic concerns will result in unnecessary code churn and wasted
 review-fix cycles.
@@ -9,4 +9,8 @@ review-fix cycles.
 The Windows CSV fallback path uses \\N as a NULL sentinel (PostgreSQL
 convention) with DuckDB's nullstr option. This is an accepted design
 choice — do not flag it as a concern.
+
+HTTP remote defaults, plaintext key display in interactive CLI,
+enabled=true override on account creation, and page-aligned pagination
+are documented design decisions — see code comments at each site.
 """

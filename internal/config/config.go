@@ -29,7 +29,7 @@ type ServerConfig struct {
 	AllowInsecure   bool     `toml:"allow_insecure"`   // Allow unauthenticated non-loopback access
 	CORSOrigins     []string `toml:"cors_origins"`     // Allowed CORS origins (empty = disabled)
 	CORSCredentials bool     `toml:"cors_credentials"` // Allow credentials in CORS
-	CORSMaxAge      int      `toml:"cors_max_age"`     // Preflight cache duration in seconds (default: 86400)
+	CORSMaxAge      int      `toml:"cors_max_age"`     // Preflight cache duration in seconds
 }
 
 // IsLoopback returns true if the bind address is a loopback address.
@@ -60,6 +60,14 @@ type AccountSchedule struct {
 	Enabled  bool   `toml:"enabled"`  // Whether scheduled sync is active
 }
 
+// RemoteConfig holds configuration for a remote msgvault server.
+// Used by export-token to remember the NAS/server destination.
+type RemoteConfig struct {
+	URL           string `toml:"url"`            // Remote server URL (e.g., http://nas:8080)
+	APIKey        string `toml:"api_key"`        // API key for authentication
+	AllowInsecure bool   `toml:"allow_insecure"` // Allow HTTP (insecure) for trusted networks
+}
+
 // Config represents the msgvault configuration.
 type Config struct {
 	Data     DataConfig        `toml:"data"`
@@ -67,6 +75,7 @@ type Config struct {
 	Sync     SyncConfig        `toml:"sync"`
 	Chat     ChatConfig        `toml:"chat"`
 	Server   ServerConfig      `toml:"server"`
+	Remote   RemoteConfig      `toml:"remote"`
 	Accounts []AccountSchedule `toml:"accounts"`
 
 	// Computed paths (not from config file)
@@ -232,6 +241,30 @@ func (c *Config) ConfigFilePath() string {
 		return c.configPath
 	}
 	return filepath.Join(c.HomeDir, "config.toml")
+}
+
+// Save writes the current configuration to disk.
+// Creates the config file if it doesn't exist, or updates it if it does.
+// Empty sections are omitted from the output.
+func (c *Config) Save() error {
+	path := c.ConfigFilePath()
+
+	// Ensure home directory exists
+	if err := c.EnsureHomeDir(); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("create config file: %w", err)
+	}
+	defer f.Close()
+
+	if err := toml.NewEncoder(f).Encode(c); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+
+	return nil
 }
 
 // ScheduledAccounts returns accounts with scheduling enabled.

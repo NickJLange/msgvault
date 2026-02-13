@@ -1,13 +1,23 @@
 package api
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/wesm/msgvault/internal/config"
+	"github.com/wesm/msgvault/internal/fileutil"
+	"github.com/wesm/msgvault/internal/scheduler"
 	"github.com/wesm/msgvault/internal/store"
+	"golang.org/x/oauth2"
 )
 
 // StatsResponse represents the archive statistics.
@@ -275,10 +285,15 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.cfgMu.RLock()
+	cfgAccounts := make([]config.AccountSchedule, len(s.cfg.Accounts))
+	copy(cfgAccounts, s.cfg.Accounts)
+	s.cfgMu.RUnlock()
+
 	var accounts []AccountInfo
 
 	// Get schedule info from config
-	for _, acc := range s.cfg.Accounts {
+	for _, acc := range cfgAccounts {
 		info := AccountInfo{
 			Email:    acc.Email,
 			Schedule: acc.Schedule,
@@ -357,5 +372,214 @@ func (s *Server) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, SchedulerStatusResponse{
 		Running:  s.scheduler.IsRunning(),
 		Accounts: statuses,
+	})
+}
+
+// tokenFile represents the on-disk token format (matches oauth package).
+type tokenFile struct {
+	oauth2.Token
+	Scopes []string `json:"scopes,omitempty"`
+}
+
+// handleUploadToken accepts a token from a remote client and saves it.
+// POST /api/v1/auth/token/{email}
+func (s *Server) handleUploadToken(w http.ResponseWriter, r *http.Request) {
+	email := chi.URLParam(r, "email")
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "missing_email", "Email address is required")
+		return
+	}
+
+	// Validate email format (basic check)
+	if !strings.Contains(email, "@") || !strings.Contains(email, ".") {
+		writeError(w, http.StatusBadRequest, "invalid_email", "Invalid email format")
+		return
+	}
+
+	// Read and validate token JSON
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "read_error", "Failed to read request body")
+		return
+	}
+
+	var tf tokenFile
+	if err := json.Unmarshal(body, &tf); err != nil {
+		s.logger.Warn("invalid token JSON", "error", err)
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid token JSON format")
+		return
+	}
+
+	// Validate token has required fields
+	if tf.RefreshToken == "" {
+		writeError(w, http.StatusBadRequest, "invalid_token", "Token must include refresh_token")
+		return
+	}
+
+	// Get tokens directory from config
+	tokensDir := s.cfg.TokensDir()
+
+	// Create tokens directory if needed
+	if err := fileutil.SecureMkdirAll(tokensDir, 0700); err != nil {
+		s.logger.Error("failed to create tokens directory", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to create tokens directory")
+		return
+	}
+
+	// Sanitize email for filename
+	tokenPath := sanitizeTokenPath(tokensDir, email)
+
+	// Marshal token back to JSON (normalized)
+	data, err := json.MarshalIndent(tf, "", "  ")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to serialize token")
+		return
+	}
+
+	// Atomic write via temp file
+	tmpFile, err := os.CreateTemp(tokensDir, ".token-*.tmp")
+	if err != nil {
+		s.logger.Error("failed to create temp file", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to save token")
+		return
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to write token")
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to close token file")
+		return
+	}
+	if err := fileutil.SecureChmod(tmpPath, 0600); err != nil {
+		os.Remove(tmpPath)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to set token permissions")
+		return
+	}
+	if err := os.Rename(tmpPath, tokenPath); err != nil {
+		os.Remove(tmpPath)
+		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to save token")
+		return
+	}
+
+	s.logger.Info("token uploaded via API", "email", email)
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"status":  "created",
+		"message": "Token saved for " + email,
+	})
+}
+
+// sanitizeTokenPath returns a safe file path for the token.
+func sanitizeTokenPath(tokensDir, email string) string {
+	// Remove dangerous characters
+	safe := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == '\x00' {
+			return -1
+		}
+		return r
+	}, email)
+
+	// Build path and verify it's within tokensDir
+	path := filepath.Join(tokensDir, safe+".json")
+	cleanPath := filepath.Clean(path)
+	cleanTokensDir := filepath.Clean(tokensDir)
+
+	// If path escapes tokensDir, use hash-based fallback
+	if !strings.HasPrefix(cleanPath, cleanTokensDir+string(os.PathSeparator)) {
+		return filepath.Join(tokensDir, fmt.Sprintf("%x.json", sha256.Sum256([]byte(email))))
+	}
+
+	return cleanPath
+}
+
+// AddAccountRequest represents a request to add an account to the config.
+type AddAccountRequest struct {
+	Email    string `json:"email"`
+	Schedule string `json:"schedule"` // Cron expression, defaults to "0 2 * * *"
+	Enabled  bool   `json:"enabled"`  // Defaults to true
+}
+
+// handleAddAccount adds an account to the config file.
+// POST /api/v1/accounts
+func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
+	var req AddAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.logger.Warn("invalid account request JSON", "error", err)
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid request JSON format")
+		return
+	}
+
+	// Validate email
+	if req.Email == "" {
+		writeError(w, http.StatusBadRequest, "missing_email", "Email is required")
+		return
+	}
+	if !strings.Contains(req.Email, "@") || !strings.Contains(req.Email, ".") {
+		writeError(w, http.StatusBadRequest, "invalid_email", "Invalid email format")
+		return
+	}
+
+	// Set defaults
+	if req.Schedule == "" {
+		req.Schedule = "0 2 * * *" // Default: 2am daily
+	}
+	req.Enabled = true // Always enable — caller is export-token registering for sync
+
+	// Validate cron expression before persisting
+	if err := scheduler.ValidateCronExpr(req.Schedule); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_schedule", err.Error())
+		return
+	}
+
+	s.cfgMu.Lock()
+
+	// Check if account already exists
+	for _, acc := range s.cfg.Accounts {
+		if acc.Email == req.Email {
+			s.cfgMu.Unlock()
+			writeJSON(w, http.StatusOK, map[string]string{
+				"status":  "exists",
+				"message": "Account already configured for " + req.Email,
+			})
+			return
+		}
+	}
+
+	// Add account to config
+	newAccount := config.AccountSchedule{
+		Email:    req.Email,
+		Schedule: req.Schedule,
+		Enabled:  req.Enabled,
+	}
+	s.cfg.Accounts = append(s.cfg.Accounts, newAccount)
+
+	// Save config; rollback in-memory state on failure
+	if err := s.cfg.Save(); err != nil {
+		s.cfg.Accounts = s.cfg.Accounts[:len(s.cfg.Accounts)-1]
+		s.cfgMu.Unlock()
+		s.logger.Error("failed to save config", "error", err)
+		writeError(w, http.StatusInternalServerError, "save_error", "Failed to save configuration")
+		return
+	}
+
+	s.cfgMu.Unlock()
+
+	// Register with live scheduler (best-effort — config is already saved)
+	if s.scheduler != nil {
+		if err := s.scheduler.AddAccount(req.Email, req.Schedule); err != nil {
+			s.logger.Warn("account saved but scheduler registration failed",
+				"email", req.Email, "error", err)
+		}
+	}
+
+	s.logger.Info("account added via API", "email", req.Email, "schedule", req.Schedule)
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"status":  "created",
+		"message": "Account added for " + req.Email,
 	})
 }
