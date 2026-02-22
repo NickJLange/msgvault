@@ -196,8 +196,78 @@ command = "op read op://vault/msgvault/key"  # 1Password example
 | `internal/store/store.go` | SQLCipher PRAGMA key on connection open |
 | `go.mod` | Add `github.com/zalando/go-keyring`, `github.com/hashicorp/vault-client-go` |
 | `cmd/msgvault/cmd/init_db.go` | Prompt for encryption setup on first run |
+| `cmd/msgvault/cmd/key.go` | New — `key export`, `key import`, `key fingerprint` subcommands |
 | `cmd/msgvault/cmd/rotate_key.go` | New — Key rotation command (re-encrypt DEK with new KEK) |
 | `Dockerfile` | SQLCipher build dependencies |
+
+## Key Backup & Portability
+
+The encryption key is tied to the OS keyring on the machine where the database was created. If you move the database to another machine, NAS, or restore from backup, you need the key. msgvault provides commands to export and import the key safely.
+
+### Backup the Key
+
+```bash
+# Export key to a file (will prompt for confirmation)
+msgvault key export --out ~/msgvault-key-backup.txt
+
+# Export key to stdout (for piping to a secret manager)
+msgvault key export --stdout
+
+# Show key fingerprint (for verification, does NOT reveal the key)
+msgvault key fingerprint
+```
+
+The exported key file contains the base64-encoded 256-bit key. **Treat this file like a password** — store it in a password manager, safe, or secondary keyring.
+
+### Restore the Key on a New Machine
+
+```bash
+# Import key from a backup file
+msgvault key import --from ~/msgvault-key-backup.txt
+
+# Import key from stdin (e.g., from a password manager CLI)
+op read "op://vault/msgvault/key" | msgvault key import --stdin
+
+# Import and store in OS keyring (default)
+msgvault key import --from ~/msgvault-key-backup.txt --provider keyring
+
+# Import and use a different provider on the new machine
+msgvault key import --from ~/msgvault-key-backup.txt --provider keyfile --keyfile-path /run/secrets/msgvault-key
+```
+
+### Moving a Database
+
+```bash
+# On the source machine:
+msgvault key export --out /tmp/msgvault-key.txt
+cp ~/.msgvault/msgvault.db /mnt/nas/msgvault.db
+
+# On the destination machine:
+msgvault key import --from /tmp/msgvault-key.txt
+# Then securely delete the export:
+shred -u /tmp/msgvault-key.txt  # Linux
+# or: rm -P /tmp/msgvault-key.txt  # macOS
+```
+
+### Key Fingerprint Verification
+
+To verify the same key is in use on both machines without exposing it:
+
+```bash
+# Source machine
+msgvault key fingerprint
+# Output: SHA-256: a1b2c3d4...
+
+# Destination machine
+msgvault key fingerprint
+# Output: SHA-256: a1b2c3d4...  (should match)
+```
+
+### What Happens Without the Key
+
+- Opening an encrypted database without the correct key **fails immediately** with a clear error (SQLCipher returns `SQLITE_NOTADB`)
+- No data is corrupted — the database is intact, just inaccessible
+- There is **no recovery** without the key — this is by design
 
 ## Migration Path
 
@@ -207,6 +277,8 @@ Existing unencrypted databases must be migrated:
    - Creates new encrypted DB via SQLCipher `ATTACH` + copy
    - Encrypts existing attachment files in-place
    - Encrypts token files
+   - Stores key in OS keyring (or configured provider)
+   - **Prints a reminder to back up the key**
 2. `msgvault decrypt` — reverse operation for export/migration
 3. Encryption flag stored in DB metadata to prevent accidental unencrypted opens
 
