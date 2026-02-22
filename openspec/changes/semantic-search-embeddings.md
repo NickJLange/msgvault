@@ -86,10 +86,12 @@ User query "rescheduling meetings"
 
 ### Indexing Strategy
 
-- **Initial build**: Batch process all messages, ~100 messages/second via Ollama (GPU-dependent)
+- **Parallel embedding**: Use a worker pool (default: 4 workers, configurable) sending concurrent requests to Ollama. Ollama handles its own GPU scheduling, so multiple in-flight requests keep the pipeline saturated. Batch messages into groups for efficient throughput.
+- **Initial build**: Parallel batch process all messages. With 4 workers, expect ~400 messages/second via Ollama (GPU-dependent).
 - **Incremental**: After each sync, embed new messages only (check `message_embeddings` for missing IDs)
 - **Auto-build**: Similar to Parquet cache — detect unembedded messages on TUI launch, offer to build
 - **Progress**: Show progress bar during embedding build (similar to `build-cache`)
+- **Resumable**: Track progress so interrupted builds resume where they left off
 
 ## Network Impact
 
@@ -104,6 +106,7 @@ If a cloud embedding API is desired in the future, it would be a separate opt-in
 server = "http://localhost:11434"
 model = "gpt-oss-128k"             # chat model (existing)
 embedding_model = "nomic-embed-text" # embedding model (new)
+embedding_workers = 4                # parallel embedding workers (new)
 max_results = 20
 ```
 
@@ -118,7 +121,7 @@ max_results = 20
 | `internal/query/engine.go` | Add `SearchSemantic` to `Engine` interface |
 | `internal/query/sqlite.go` | Implement semantic search (load vectors, cosine sim) |
 | `internal/search/parser.go` | Detect semantic vs keyword queries |
-| `internal/config/config.go` | Add `EmbeddingModel` to `ChatConfig` |
+| `internal/config/config.go` | Add `EmbeddingModel`, `EmbeddingWorkers` to `ChatConfig` |
 | `cmd/msgvault/cmd/build_embeddings.go` | New — CLI command for embedding build |
 | `internal/tui/model.go` | Integrate semantic search results |
 
