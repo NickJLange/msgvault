@@ -287,13 +287,186 @@ Existing unencrypted databases must be migrated:
 - **Vault provider**: Adds outbound HTTPS to Vault server address (must be added to container network whitelist)
 - **All other providers**: No new network calls
 
+## Test Plan
+
+### Unit Tests
+
+**`internal/encryption/provider_test.go`** — Key provider interface and implementations:
+
+| Test | Description |
+|---|---|
+| `TestKeyfileProvider_GetKey` | Reads key from file, verifies 256-bit output |
+| `TestKeyfileProvider_FileNotFound` | Returns clear error for missing key file |
+| `TestKeyfileProvider_InvalidKey` | Rejects keys that aren't 256 bits |
+| `TestEnvProvider_GetKey` | Reads base64 key from env var |
+| `TestEnvProvider_Unset` | Returns error when env var not set |
+| `TestPassphraseProvider_DeriveKey` | Argon2id derivation produces consistent key for same passphrase+salt |
+| `TestExecProvider_GetKey` | Runs a command, reads key from stdout |
+| `TestExecProvider_CommandFails` | Returns error on non-zero exit |
+
+**`internal/encryption/keyring_test.go`** — OS keyring provider:
+
+| Test | Description |
+|---|---|
+| `TestKeyringProvider_SetAndGet` | Round-trip store and retrieve (uses `keyring.MockInit()`) |
+| `TestKeyringProvider_NotFound` | Returns clear error when no key stored |
+| `TestKeyringProvider_MultipleDBs` | Independent keys for different DB paths |
+
+**`internal/encryption/file_test.go`** — AES-256-GCM file encryption:
+
+| Test | Description |
+|---|---|
+| `TestEncryptDecryptFile` | Round-trip: encrypt file, decrypt, compare to original |
+| `TestEncryptDecryptFile_LargeFile` | 100MB+ file to verify streaming works |
+| `TestDecryptFile_WrongKey` | Fails with authentication error, not garbage output |
+| `TestDecryptFile_Tampered` | Modified ciphertext detected by GCM |
+| `TestDecryptFile_Truncated` | Truncated file returns clear error |
+| `TestEncryptFile_Idempotent` | Re-encrypting same plaintext produces different ciphertext (random nonce) |
+
+**`internal/encryption/vault_test.go`** — HashiCorp Vault provider:
+
+| Test | Description |
+|---|---|
+| `TestVaultKVProvider_GetKey` | Mock Vault HTTP server, verify KV v2 read |
+| `TestVaultTransitProvider_WrapUnwrap` | Mock Transit encrypt/decrypt endpoints |
+| `TestVaultProvider_AuthFailure` | Returns clear error on 403 |
+| `TestVaultProvider_Unavailable` | Returns error on connection failure |
+
+### Integration Tests
+
+**`internal/store/store_encryption_test.go`** — SQLCipher integration:
+
+| Test | Description |
+|---|---|
+| `TestEncryptedStore_Open` | Open encrypted DB, insert data, verify round-trip |
+| `TestEncryptedStore_WrongKey` | Open with wrong key returns `SQLITE_NOTADB` |
+| `TestEncryptedStore_FTS5` | Full-text search works on encrypted DB |
+| `TestEncryptedStore_RawUnreadable` | Read DB file bytes directly, verify no plaintext (use `strings`-equivalent check) |
+| `TestEncryptedStore_Migration` | Unencrypted DB → encrypted via `ATTACH` copy, verify all data intact |
+| `TestEncryptedStore_Concurrent` | Multiple goroutines read/write encrypted DB |
+
+**`cmd/msgvault/cmd/key_test.go`** — CLI key management:
+
+| Test | Description |
+|---|---|
+| `TestKeyExportImport_Roundtrip` | Export key, import on fresh keyring, open DB |
+| `TestKeyFingerprint_Matches` | Fingerprint is consistent for same key |
+| `TestKeyExport_Stdout` | `--stdout` flag writes only key, no extra output |
+| `TestKeyImport_Stdin` | Pipe key via stdin |
+| `TestEncryptCommand_NewDB` | `msgvault encrypt` on unencrypted DB succeeds |
+| `TestEncryptCommand_AlreadyEncrypted` | `msgvault encrypt` on encrypted DB is a no-op with warning |
+| `TestDecryptCommand` | `msgvault decrypt` produces usable unencrypted DB |
+
+### Performance Tests
+
+**`internal/store/store_encryption_bench_test.go`**:
+
+| Benchmark | Description |
+|---|---|
+| `BenchmarkInsert_Unencrypted` | Baseline insert throughput |
+| `BenchmarkInsert_Encrypted` | Encrypted insert throughput (expect <15% delta) |
+| `BenchmarkFTS5Search_Unencrypted` | Baseline FTS5 query |
+| `BenchmarkFTS5Search_Encrypted` | Encrypted FTS5 query |
+| `BenchmarkFileEncrypt_1MB` | AES-GCM file encryption throughput |
+| `BenchmarkFileEncrypt_100MB` | Large file encryption throughput |
+
+### Edge Case Tests
+
+| Test | Description |
+|---|---|
+| `TestEncryptedStore_EmptyDB` | Encrypt an empty database |
+| `TestEncryptedStore_CorruptHeader` | Corrupted file header returns error, not panic |
+| `TestKeyRotation_MidOperation` | Key rotation while queries are in flight |
+| `TestEncryptedAttachments_ContentAddressed` | Encrypted attachments still deduplicate by content hash |
+| `TestProviderFallback` | Keyring unavailable → falls back to configured alternate |
+
+## Documentation Updates
+
+### README.md
+
+Add to the **Features** list:
+```markdown
+- **Encryption at rest**: SQLCipher database encryption + AES-256-GCM file encryption with pluggable key providers (OS keychain, passphrase, keyfile, HashiCorp Vault)
+```
+
+Add new **Encryption** section after the existing Quick Start:
+```markdown
+## Encryption
+
+msgvault supports encryption at rest for all stored data.
+
+### Enable encryption on a new database
+    msgvault init-db --encrypted
+
+### Encrypt an existing database
+    msgvault encrypt
+
+### Key management
+    msgvault key export --out ~/msgvault-key-backup.txt
+    msgvault key import --from ~/msgvault-key-backup.txt
+    msgvault key fingerprint
+
+By default, the encryption key is stored in your OS keychain (macOS
+Keychain, GNOME Keyring, or Windows Credential Manager). See the
+[Encryption Guide](https://msgvault.io/guides/encryption/) for
+alternative key providers including HashiCorp Vault.
+```
+
+### CLAUDE.md
+
+Add to **Quick Commands**:
+```markdown
+./msgvault encrypt                              # Encrypt existing database
+./msgvault decrypt                              # Decrypt for export/migration
+./msgvault key export --out key.txt             # Backup encryption key
+./msgvault key import --from key.txt            # Restore encryption key
+./msgvault key fingerprint                      # Show key fingerprint
+```
+
+Add to **Configuration** section:
+```markdown
+[encryption]
+enabled = true
+provider = "keyring"  # keyring | passphrase | keyfile | env | vault | exec
+```
+
+Add to **Implementation Status > Completed** (when done):
+```markdown
+- **Encryption at rest**: SQLCipher DB encryption, AES-256-GCM file encryption, pluggable key providers
+```
+
+### docs/encryption.md (New)
+
+Full encryption guide covering:
+1. Overview — what is encrypted, threat model
+2. Quick start — `init-db --encrypted` and `encrypt`
+3. Key providers — configuration for each (keyring, passphrase, keyfile, env, vault, exec)
+4. Key backup & portability — export, import, fingerprint, moving databases
+5. Key rotation — `rotate-key` command
+6. Container deployments — keyfile/env provider, Vault sidecar
+7. Performance — expected overhead benchmarks
+8. FAQ — wrong key behavior, recovery, multiple databases
+
+### docs/api.md
+
+Update API docs to note:
+- Encrypted databases require key on server startup
+- API server config supports `[encryption]` section
+
+### TUI Keybindings / Help
+
+Add to `?` help screen:
+```
+🔒  Database encrypted (SQLCipher)
+```
+Status indicator in TUI footer when encryption is active.
+
 ## Verification
 
-1. Create encrypted DB with passphrase provider — verify raw `msgvault.db` is unreadable
-2. Open encrypted DB — verify all queries, FTS5, TUI work normally
-3. Rotate key — verify DB remains accessible with new key
-4. Vault provider — verify key retrieval from Vault KV v2
-5. Performance benchmark: encrypted vs unencrypted sync + query
-6. `strings msgvault.db` shows no plaintext email content
-7. Attachment files are unreadable without key
-8. Startup fails gracefully with wrong key (clear error, no corruption)
+1. All unit tests pass: `go test ./internal/encryption/...`
+2. All integration tests pass: `go test ./internal/store/... -run Encrypt`
+3. CLI tests pass: `go test ./cmd/msgvault/cmd/... -run Key`
+4. Performance benchmarks within 15% overhead: `go test -bench BenchmarkEncrypt ./internal/store/...`
+5. `strings msgvault.db` shows no plaintext email content
+6. Startup fails gracefully with wrong key (clear error, no corruption)
+7. README, CLAUDE.md, and docs/ are updated and accurate
