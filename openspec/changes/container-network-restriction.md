@@ -12,16 +12,21 @@ Network audit (see `openspec/specs/project.md`) identified that msgvault only re
 
 All other network features (remote server sync, Ollama) are user-opt-in and not needed for the primary archive use case.
 
+## Upstream Status
+
+**Issue #116 / PR #117** (merged 2026-02-13) already implemented the base Docker/NAS deployment:
+- Multi-arch Dockerfile (amd64 + arm64), Debian bookworm-slim runtime
+- Non-root user (UID 1000), built-in healthcheck
+- `export-token` command for headless OAuth workaround
+- `docker-compose.yml` generation via `msgvault setup`
+- CI/CD workflow at `.github/workflows/docker.yml`
+- Documentation at `docs/docker.md`
+
+**This proposal extends the existing Docker support** with network egress restriction (domain-level allowlisting) to harden the container's attack surface. The existing Dockerfile and compose setup remain the foundation.
+
 ## Proposed Changes
 
-### 1. Dockerfile enhancements (`Dockerfile`)
-
-- Use multi-stage build: builder stage (Go + DuckDB) → minimal runtime (distroless or alpine)
-- Run as non-root user
-- Mount volume for `~/.msgvault/` data persistence
-- Expose port 8080 only if API server is needed
-
-### 2. Docker Compose with network policy (`docker-compose.yml`)
+### 1. Docker Compose with network policy (`docker-compose.yml`)
 
 - Define a custom network with restricted egress
 - Use DNS-based allowlist via a network proxy sidecar (e.g., squid or envoy) or iptables rules in an init container
