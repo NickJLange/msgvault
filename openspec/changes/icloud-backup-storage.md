@@ -1,4 +1,4 @@
-# iCloud-Backed Storage on macOS
+# Cloud-Backed Storage
 
 ## Goal
 
@@ -151,21 +151,43 @@ func ensureICloudSafe(dbPath string) error {
 # Automatically set on macOS with iCloud; can be overridden
 # data_dir = "~/Library/Mobile Documents/com~apple~CloudDocs/msgvault"
 
-[data.icloud]
-enabled = true            # Whether iCloud storage is active (macOS only)
-pin_database = true       # Prevent iCloud from evicting the database file
+[data.cloud_backup]
+enabled = true            # Whether cloud-backed storage is active
+pin_database = true       # Prevent cloud provider from evicting the database file
 ```
+
+## Other Platforms
+
+### Windows — OneDrive (Deferred)
+
+Windows has an equivalent in OneDrive, which is pre-installed on Windows 10/11 and deeply OS-integrated. The same approach would work:
+
+| Aspect | Detail |
+|---|---|
+| **Default path** | `%USERPROFILE%\OneDrive\msgvault\` |
+| **Detection** | Check `OneDrive` or `OneDriveConsumer` env vars, or registry `HKCU\Software\Microsoft\OneDrive` |
+| **Eviction** | "Files On-Demand" — identical risk to iCloud. Pin via `FILE_ATTRIBUTE_PINNED` / `SetFileAttributes` |
+| **SQLite safety** | Same WAL/SHM concerns. OneDrive respects `.nosync` convention or `FILE_ATTRIBUTE_UNPINNED` for exclusion |
+| **Conflict copies** | OneDrive creates `filename (1).db` style copies — same detection pattern |
+
+**Status**: Design is understood and implementation would mirror the macOS approach (`cloudsync_windows.go` with build tags). Deferred until there is user demand — no Windows users have requested cloud backup yet.
+
+### Linux — No OS-Level Equivalent (Needs Customer Demand)
+
+Linux has no built-in cloud sync service. Users who want cloud-backed storage typically use Dropbox, rclone, Syncthing, or similar tools, but none are OS-integrated or universally available. Supporting any specific third-party provider would add complexity for a small audience.
+
+**Status**: Not planned. Will revisit if there is customer demand for a specific provider integration (e.g., Dropbox folder detection).
 
 ## Proposed Changes
 
 | File | Change |
 |---|---|
-| `internal/config/config.go` | Add `ICloudConfig` struct, update `DefaultHome()` to check iCloud on macOS |
-| `internal/config/icloud_darwin.go` | New — macOS-specific iCloud detection, eviction check, `.nosync` management |
-| `internal/config/icloud_other.go` | New — no-op stubs for non-macOS platforms |
-| `internal/store/store.go` | Call `ensureICloudSafe()` on database open |
+| `internal/config/config.go` | Add `CloudBackupConfig` struct, update `DefaultHome()` to check cloud storage on macOS |
+| `internal/config/cloudsync_darwin.go` | New — macOS-specific iCloud detection, eviction check, `.nosync` management |
+| `internal/config/cloudsync_other.go` | New — no-op stubs for non-macOS/Windows platforms |
+| `internal/store/store.go` | Call `ensureCloudSyncSafe()` on database open |
 | `cmd/msgvault/cmd/migrate_storage.go` | New — `migrate-storage` command (--to icloud/local) |
-| `cmd/msgvault/cmd/storage_info.go` | New — `storage-info` command showing location + iCloud status |
+| `cmd/msgvault/cmd/storage_info.go` | New — `storage-info` command showing location + cloud sync status |
 | `cmd/msgvault/cmd/init_db.go` | Update to select iCloud path on macOS first run |
 
 ## Verification
@@ -176,7 +198,7 @@ pin_database = true       # Prevent iCloud from evicting the database file
 4. `msgvault storage-info` shows iCloud status, sync state, eviction status
 5. `msgvault migrate-storage --to icloud` moves existing `~/.msgvault/` successfully
 6. `msgvault migrate-storage --to local` moves back, removes symlink
-7. On Linux/Windows: iCloud logic is completely inactive (build tags)
+7. On Linux/Windows: cloud sync logic is completely inactive (build tags)
 8. Evicted database file produces clear error message, not a crash
 9. Conflict copies produce a warning log, not a crash
 10. Performance: write throughput benchmarks show no regression (iCloud syncs asynchronously)
