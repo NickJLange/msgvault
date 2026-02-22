@@ -111,11 +111,34 @@ type KeyProvider interface {
 
 | Provider | Source | Use Case |
 |---|---|---|
-| `passphrase` | Interactive prompt → Argon2id KDF | Personal desktop use |
+| `keyring` | OS keychain (macOS Keychain, GNOME Keyring, KWallet, Windows Credential Manager) | **Default for desktop use** — key stored securely by OS |
+| `passphrase` | Interactive prompt → Argon2id KDF | Fallback when no OS keyring available |
 | `keyfile` | Read 256-bit key from file path | Automated/container deployments |
 | `env` | `MSGVAULT_ENCRYPTION_KEY` env var | CI/CD, container orchestration |
 | `vault` | HashiCorp Vault KV or Transit engine | Enterprise / high-security |
 | `exec` | Run external command, read key from stdout | Custom integrations (KMS, 1Password CLI, etc.) |
+
+### OS Keyring Provider (Default)
+
+Uses [`zalando/go-keyring`](https://github.com/zalando/go-keyring) (1.1k stars, pure Go, no CGo):
+
+| OS | Backend | Notes |
+|---|---|---|
+| macOS | Keychain Services (via `/usr/bin/security`) | Protected by login password + Secure Enclave on Apple Silicon |
+| Linux | Secret Service D-Bus API (GNOME Keyring, KWallet) | Unlocked with user login session |
+| Windows | Credential Manager | Protected by user login |
+
+**Workflow**:
+1. On first `msgvault encrypt` or `init-db --encrypted`, generate a random 256-bit key
+2. Store it in the OS keyring: `keyring.Set("msgvault", "<db-path>", base64(key))`
+3. On every subsequent open, retrieve: `keyring.Get("msgvault", "<db-path>")`
+4. If keyring unavailable (headless server, container), fall back to configured provider
+
+**Benefits**:
+- Zero-friction for desktop users — no passphrase to type, no key file to manage
+- Key protected by OS-level security (login password, biometrics on macOS)
+- Multiple databases can have independent keys (keyed by DB path)
+- Key persists across reboots without user intervention
 
 ### HashiCorp Vault Integration
 
@@ -140,7 +163,7 @@ Two modes of Vault integration:
 ```toml
 [encryption]
 enabled = true
-provider = "passphrase"  # passphrase | keyfile | env | vault | exec
+provider = "keyring"  # keyring | passphrase | keyfile | env | vault | exec
 
 [encryption.keyfile]
 path = "/run/secrets/msgvault-key"
@@ -164,13 +187,14 @@ command = "op read op://vault/msgvault/key"  # 1Password example
 
 | File | Change |
 |---|---|
-| `internal/encryption/provider.go` | New — `KeyProvider` interface + passphrase, keyfile, env providers |
+| `internal/encryption/provider.go` | New — `KeyProvider` interface + keyring, passphrase, keyfile, env providers |
+| `internal/encryption/keyring.go` | New — OS keyring provider via `zalando/go-keyring` |
 | `internal/encryption/vault.go` | New — HashiCorp Vault KV + Transit provider |
 | `internal/encryption/exec.go` | New — External command provider |
 | `internal/encryption/file.go` | New — AES-256-GCM file encryption (attachments, tokens) |
 | `internal/config/config.go` | Add `EncryptionConfig` struct |
 | `internal/store/store.go` | SQLCipher PRAGMA key on connection open |
-| `go.mod` | Add `github.com/hashicorp/vault-client-go` |
+| `go.mod` | Add `github.com/zalando/go-keyring`, `github.com/hashicorp/vault-client-go` |
 | `cmd/msgvault/cmd/init_db.go` | Prompt for encryption setup on first run |
 | `cmd/msgvault/cmd/rotate_key.go` | New — Key rotation command (re-encrypt DEK with new KEK) |
 | `Dockerfile` | SQLCipher build dependencies |
