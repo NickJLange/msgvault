@@ -70,9 +70,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 			"hint", "Add accounts to config.toml or upload tokens via API first")
 	}
 
-	// Open database
-	dbPath := cfg.DatabaseDSN()
-	s, err := store.Open(dbPath)
+	// Open database (handles encryption if enabled)
+	s, err := openLocalStore()
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

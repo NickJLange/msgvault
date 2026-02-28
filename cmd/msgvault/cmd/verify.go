@@ -12,7 +12,6 @@ import (
 	"github.com/wesm/msgvault/internal/gmail"
 	"github.com/wesm/msgvault/internal/mime"
 	"github.com/wesm/msgvault/internal/oauth"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var verifySampleSize int
@@ -40,9 +39,8 @@ Examples:
 			return errOAuthNotConfigured()
 		}
 
-		// Open database
-		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		// Open database (handles encryption if enabled)
+		s, err := openLocalStore()
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

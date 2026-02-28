@@ -1064,13 +1064,18 @@ func (m Model) footerView() string {
 
 	keysStr := strings.Join(keys, " │ ")
 
+	encStr := ""
+	if m.encrypted {
+		encStr = " 🔒"
+	}
+
 	// Use lipgloss.Width for ANSI-aware width calculation (handles Unicode arrows ↑↓ correctly)
-	gap := m.width - lipgloss.Width(keysStr) - lipgloss.Width(posStr) - lipgloss.Width(selStr) - 2
+	gap := m.width - lipgloss.Width(keysStr) - lipgloss.Width(posStr) - lipgloss.Width(selStr) - lipgloss.Width(encStr) - 2
 	if gap < 0 {
 		gap = 0
 	}
 
-	return footerStyle.Render(keysStr + strings.Repeat(" ", gap) + selStr + posStr)
+	return footerStyle.Render(keysStr + strings.Repeat(" ", gap) + selStr + encStr + posStr)
 }
 
 // spinnerIndicator returns the current spinner frame string.

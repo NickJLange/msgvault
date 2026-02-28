@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var initDBCmd = &cobra.Command{
@@ -19,7 +18,8 @@ created if they don't already exist.`,
 		dbPath := cfg.DatabaseDSN()
 		logger.Info("initializing database", "path", dbPath)
 
-		s, err := store.Open(dbPath)
+		// Open database (handles encryption if enabled)
+		s, err := openLocalStore()
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb"
+	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/wesm/msgvault/internal/mime"
 	"github.com/wesm/msgvault/internal/search"
 )
@@ -42,6 +43,7 @@ type DuckDBEngine struct {
 	sqliteDB         *sql.DB       // Direct SQLite connection for FTS and body retrieval
 	sqliteEngine     *SQLiteEngine // Reusable engine for FTS cache, created once if sqliteDB is set
 	hasSQLiteScanner bool          // true if DuckDB's sqlite extension is loaded
+	parquetEncrypted bool          // true if Parquet files use Modular Encryption
 	tempTableSeq     atomic.Uint64 // Unique suffix for temp tables to avoid concurrent collisions
 
 	// Search result cache: keeps the materialized temp table alive across
@@ -60,6 +62,16 @@ type DuckDBOptions struct {
 	// queries to route through sqliteEngine, matching the Windows code path.
 	// Useful for testing the non-scanner code path on Linux/macOS.
 	DisableSQLiteScanner bool
+
+	// Encrypted indicates the SQLite database is SQLCipher-encrypted.
+	// DuckDB's sqlite_scanner cannot read SQLCipher files, so this forces
+	// the direct-SQLite fallback path (same as DisableSQLiteScanner).
+	Encrypted bool
+
+	// EncryptionKey is the raw 32-byte key for Parquet Modular Encryption.
+	// When set, all read_parquet() calls include encryption_config.
+	// The key is registered via PRAGMA add_parquet_key on engine creation.
+	EncryptionKey []byte
 }
 
 // NewDuckDBEngine creates a new DuckDB-backed query engine.
@@ -104,7 +116,7 @@ func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB, o
 	// DisableSQLiteScanner forces the same fallback on any platform (for testing).
 	// On other platforms, try to load but fall back gracefully (e.g. no internet).
 	var hasSQLiteScanner bool
-	if sqlitePath != "" && runtime.GOOS != "windows" && !opt.DisableSQLiteScanner {
+	if sqlitePath != "" && runtime.GOOS != "windows" && !opt.DisableSQLiteScanner && !opt.Encrypted {
 		if _, err := db.Exec("INSTALL sqlite; LOAD sqlite;"); err != nil {
 			log.Printf("[warn] sqlite_scanner extension unavailable, falling back to direct SQLite: %v", err)
 		} else {
@@ -117,6 +129,24 @@ func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB, o
 				hasSQLiteScanner = true
 			}
 		}
+	}
+
+	// Register Parquet encryption key if provided
+	var parquetEncrypted bool
+	if len(opt.EncryptionKey) > 0 {
+		if len(opt.EncryptionKey) < 32 {
+			db.Close()
+			return nil, fmt.Errorf("encryption key must be at least 32 bytes, got %d", len(opt.EncryptionKey))
+		}
+		// Base64-encode the binary key for DuckDB Parquet Modular Encryption
+		// DuckDB's add_parquet_key accepts base64-encoded keys
+		parquetKeyB64 := base64.StdEncoding.EncodeToString(opt.EncryptionKey[:32])
+		pragmaSQL := fmt.Sprintf("PRAGMA add_parquet_key('msgvault_key', '%s')", parquetKeyB64)
+		if _, err := db.Exec(pragmaSQL); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("register parquet encryption key: %w", err)
+		}
+		parquetEncrypted = true
 	}
 
 	// Create reusable SQLiteEngine if we have a direct connection
@@ -133,6 +163,7 @@ func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB, o
 		sqliteDB:         sqliteDB,
 		sqliteEngine:     sqliteEngine,
 		hasSQLiteScanner: hasSQLiteScanner,
+		parquetEncrypted: parquetEncrypted,
 	}, nil
 }
 
@@ -160,6 +191,15 @@ func (e *DuckDBEngine) parquetPath(table string) string {
 	return filepath.Join(e.analyticsDir, table, "*.parquet")
 }
 
+// parquetEncryptionOpt returns the encryption_config option for read_parquet()
+// calls when Parquet Modular Encryption is active, or empty string otherwise.
+func (e *DuckDBEngine) parquetEncryptionOpt() string {
+	if e.parquetEncrypted {
+		return ", encryption_config={footer_key: 'msgvault_key'}"
+	}
+	return ""
+}
+
 // parquetCTEs returns common CTEs for reading all Parquet tables.
 // This is used by aggregate queries that need to join across tables.
 // parquetCTEs returns the WITH clause body that defines CTEs for all Parquet
@@ -168,6 +208,7 @@ func (e *DuckDBEngine) parquetPath(table string) string {
 // integer/boolean columns as VARCHAR, causing type mismatch errors in JOINs
 // and COALESCE expressions.
 func (e *DuckDBEngine) parquetCTEs() string {
+	enc := e.parquetEncryptionOpt()
 	return fmt.Sprintf(`
 		msg AS (
 			SELECT * REPLACE (
@@ -179,7 +220,7 @@ func (e *DuckDBEngine) parquetCTEs() string {
 				CAST(snippet AS VARCHAR) AS snippet,
 				CAST(size_estimate AS BIGINT) AS size_estimate,
 				COALESCE(TRY_CAST(has_attachments AS BOOLEAN), false) AS has_attachments
-			) FROM read_parquet('%s', hive_partitioning=true)
+			) FROM read_parquet('%s', hive_partitioning=true%s)
 		),
 		mr AS (
 			SELECT * REPLACE (
@@ -187,7 +228,7 @@ func (e *DuckDBEngine) parquetCTEs() string {
 				CAST(participant_id AS BIGINT) AS participant_id,
 				CAST(recipient_type AS VARCHAR) AS recipient_type,
 				CAST(display_name AS VARCHAR) AS display_name
-			) FROM read_parquet('%s')
+			) FROM read_parquet('%s'%s)
 		),
 		p AS (
 			SELECT * REPLACE (
@@ -195,46 +236,46 @@ func (e *DuckDBEngine) parquetCTEs() string {
 				CAST(email_address AS VARCHAR) AS email_address,
 				CAST(domain AS VARCHAR) AS domain,
 				CAST(display_name AS VARCHAR) AS display_name
-			) FROM read_parquet('%s')
+			) FROM read_parquet('%s'%s)
 		),
 		lbl AS (
 			SELECT * REPLACE (
 				CAST(id AS BIGINT) AS id,
 				CAST(name AS VARCHAR) AS name
-			) FROM read_parquet('%s')
+			) FROM read_parquet('%s'%s)
 		),
 		ml AS (
 			SELECT * REPLACE (
 				CAST(message_id AS BIGINT) AS message_id,
 				CAST(label_id AS BIGINT) AS label_id
-			) FROM read_parquet('%s')
+			) FROM read_parquet('%s'%s)
 		),
 		att AS (
 			SELECT CAST(message_id AS BIGINT) AS message_id,
 				SUM(COALESCE(TRY_CAST(size AS BIGINT), 0)) as attachment_size,
 				COUNT(*) as attachment_count
-			FROM read_parquet('%s')
+			FROM read_parquet('%s'%s)
 			GROUP BY 1
 		),
 		src AS (
 			SELECT * REPLACE (
 				CAST(id AS BIGINT) AS id
-			) FROM read_parquet('%s')
+			) FROM read_parquet('%s'%s)
 		),
 		conv AS (
 			SELECT * REPLACE (
 				CAST(id AS BIGINT) AS id,
 				CAST(source_conversation_id AS VARCHAR) AS source_conversation_id
-			) FROM read_parquet('%s')
+			) FROM read_parquet('%s'%s)
 		)
-	`, e.parquetGlob(),
-		e.parquetPath("message_recipients"),
-		e.parquetPath("participants"),
-		e.parquetPath("labels"),
-		e.parquetPath("message_labels"),
-		e.parquetPath("attachments"),
-		e.parquetPath("sources"),
-		e.parquetPath("conversations"))
+	`, e.parquetGlob(), enc,
+		e.parquetPath("message_recipients"), enc,
+		e.parquetPath("participants"), enc,
+		e.parquetPath("labels"), enc,
+		e.parquetPath("message_labels"), enc,
+		e.parquetPath("attachments"), enc,
+		e.parquetPath("sources"), enc,
+		e.parquetPath("conversations"), enc)
 }
 
 // escapeILIKE escapes ILIKE wildcard characters (% and _) in user input.

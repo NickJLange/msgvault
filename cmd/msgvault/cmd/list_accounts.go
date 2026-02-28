@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/remote"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var listAccountsJSON bool
@@ -64,8 +63,8 @@ func listRemoteAccounts() error {
 
 // listLocalAccounts fetches and displays accounts from the local database.
 func listLocalAccounts() error {
-	dbPath := cfg.DatabaseDSN()
-	s, err := store.Open(dbPath)
+	// Open database (handles encryption if enabled)
+	s, err := openLocalStore()
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

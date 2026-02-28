@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,10 +15,11 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/duckdb/duckdb-go/v2"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/config"
+	"github.com/wesm/msgvault/internal/encryption"
 	"github.com/wesm/msgvault/internal/query"
 )
 
@@ -110,7 +114,15 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 	// Use direct SQLite to check for new messages (fast, uses indexes)
 	// DuckDB's sqlite extension doesn't use SQLite indexes, so this query
 	// would scan the entire table if we used DuckDB.
-	sqliteDB, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	sqliteDSN := dbPath + "?mode=ro"
+	if cfg != nil && cfg.Encryption.Enabled {
+		key, err := getEncryptionKey()
+		if err != nil {
+			return nil, fmt.Errorf("get encryption key for cache build: %w", err)
+		}
+		sqliteDSN += "&_pragma_key=x'" + hex.EncodeToString(key) + "'"
+	}
+	sqliteDB, err := sql.Open("sqlite3", sqliteDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite for max id check: %w", err)
 	}
@@ -151,6 +163,24 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		return nil, fmt.Errorf("open duckdb: %w", err)
 	}
 	defer db.Close()
+
+	// Register Parquet encryption key if encryption is enabled
+	encryptionOpt := ""
+	if cfg != nil && cfg.Encryption.Enabled {
+		key, keyErr := getEncryptionKey()
+		if keyErr != nil {
+			return nil, fmt.Errorf("get encryption key for parquet: %w", keyErr)
+		}
+		// DuckDB Parquet encryption requires a 128, 192, or 256-bit key.
+		// Use the first 32 bytes of our master key (256-bit).
+		// Base64-encode the binary key for safe SQL representation
+		parquetKeyB64 := base64.StdEncoding.EncodeToString(key[:32])
+		pragmaSQL := fmt.Sprintf("PRAGMA add_parquet_key('msgvault_key', '%s')", parquetKeyB64)
+		if _, err := db.Exec(pragmaSQL); err != nil {
+			return nil, fmt.Errorf("register parquet encryption key: %w", err)
+		}
+		encryptionOpt = ",\n\t\tENCRYPTION_CONFIG {footer_key: 'msgvault_key'}"
+	}
 
 	// Set up sqlite_db tables — either via DuckDB's sqlite extension (Linux/macOS)
 	// or via CSV intermediate files (Windows, where sqlite_scanner is unavailable).
@@ -240,9 +270,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		FORMAT PARQUET,
 		PARTITION_BY (year),
 		%s,
-		COMPRESSION 'zstd'
+		COMPRESSION 'zstd'%s
 	)
-	`, idFilter, escapedMessagesDir, writeMode)); err != nil {
+	`, idFilter, escapedMessagesDir, writeMode, encryptionOpt)); err != nil {
 		return nil, fmt.Errorf("export messages: %w", err)
 	}
 
@@ -263,9 +293,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		FROM sqlite_db.message_recipients%s
 	) TO '%s/%s' (
 		FORMAT PARQUET,
-		COMPRESSION 'zstd'
+		COMPRESSION 'zstd'%s
 	)
-	`, recipientsFilter, escapedRecipientsDir, junctionFile)); err != nil {
+	`, recipientsFilter, escapedRecipientsDir, junctionFile, encryptionOpt)); err != nil {
 		return nil, fmt.Errorf("export message_recipients: %w", err)
 	}
 
@@ -284,9 +314,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		FROM sqlite_db.message_labels%s
 	) TO '%s/%s' (
 		FORMAT PARQUET,
-		COMPRESSION 'zstd'
+		COMPRESSION 'zstd'%s
 	)
-	`, messageLabelsFilter, escapedMessageLabelsDir, junctionFile)); err != nil {
+	`, messageLabelsFilter, escapedMessageLabelsDir, junctionFile, encryptionOpt)); err != nil {
 		return nil, fmt.Errorf("export message_labels: %w", err)
 	}
 
@@ -306,9 +336,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		FROM sqlite_db.attachments%s
 	) TO '%s/%s' (
 		FORMAT PARQUET,
-		COMPRESSION 'zstd'
+		COMPRESSION 'zstd'%s
 	)
-	`, attachmentsFilter, escapedAttachmentsDir, junctionFile)); err != nil {
+	`, attachmentsFilter, escapedAttachmentsDir, junctionFile, encryptionOpt)); err != nil {
 		return nil, fmt.Errorf("export attachments: %w", err)
 	}
 
@@ -325,9 +355,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		FROM sqlite_db.participants
 	) TO '%s/participants.parquet' (
 		FORMAT PARQUET,
-		COMPRESSION 'zstd'
+		COMPRESSION 'zstd'%s
 	)
-	`, escapedParticipantsDir)); err != nil {
+	`, escapedParticipantsDir, encryptionOpt)); err != nil {
 		return nil, fmt.Errorf("export participants: %w", err)
 	}
 
@@ -342,9 +372,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		FROM sqlite_db.labels
 	) TO '%s/labels.parquet' (
 		FORMAT PARQUET,
-		COMPRESSION 'zstd'
+		COMPRESSION 'zstd'%s
 	)
-	`, escapedLabelsDir)); err != nil {
+	`, escapedLabelsDir, encryptionOpt)); err != nil {
 		return nil, fmt.Errorf("export labels: %w", err)
 	}
 
@@ -359,9 +389,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		FROM sqlite_db.sources
 	) TO '%s/sources.parquet' (
 		FORMAT PARQUET,
-		COMPRESSION 'zstd'
+		COMPRESSION 'zstd'%s
 	)
-	`, escapedSourcesDir)); err != nil {
+	`, escapedSourcesDir, encryptionOpt)); err != nil {
 		return nil, fmt.Errorf("export sources: %w", err)
 	}
 
@@ -376,9 +406,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 		FROM sqlite_db.conversations
 	) TO '%s/conversations.parquet' (
 		FORMAT PARQUET,
-		COMPRESSION 'zstd'
+		COMPRESSION 'zstd'%s
 	)
-	`, escapedConversationsDir)); err != nil {
+	`, escapedConversationsDir, encryptionOpt)); err != nil {
 		return nil, fmt.Errorf("export conversations: %w", err)
 	}
 
@@ -386,7 +416,11 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 
 	// Count exported messages
 	var exportedCount int64
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s/**/*.parquet', hive_partitioning=true)", escapedMessagesDir)
+	encryptionReadOpt := ""
+	if encryptionOpt != "" {
+		encryptionReadOpt = ", encryption_config={footer_key: 'msgvault_key'}"
+	}
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM read_parquet('%s/**/*.parquet', hive_partitioning=true%s)", escapedMessagesDir, encryptionReadOpt)
 	if err := db.QueryRow(countSQL).Scan(&exportedCount); err != nil {
 		exportedCount = 0
 	}
@@ -469,17 +503,32 @@ var cacheStatsCmd = &cobra.Command{
 		}
 		defer db.Close()
 
+		// Register Parquet encryption key if needed
+		encReadOpt := ""
+		if cfg != nil && cfg.Encryption.Enabled {
+			key, keyErr := getEncryptionKey()
+			if keyErr != nil {
+				return fmt.Errorf("get encryption key for cache stats: %w", keyErr)
+			}
+			parquetKeyB64 := base64.StdEncoding.EncodeToString(key[:32])
+			pragmaSQL := fmt.Sprintf("PRAGMA add_parquet_key('msgvault_key', '%s')", parquetKeyB64)
+			if _, err := db.Exec(pragmaSQL); err != nil {
+				return fmt.Errorf("register parquet encryption key: %w", err)
+			}
+			encReadOpt = ", encryption_config={footer_key: 'msgvault_key'}"
+		}
+
 		// Query stats by joining Parquet files
 		escapedDir := strings.ReplaceAll(analyticsDir, "'", "''")
 		statsSQL := fmt.Sprintf(`
 		WITH msg AS (
-			SELECT * FROM read_parquet('%s/messages/**/*.parquet', hive_partitioning=true)
+			SELECT * FROM read_parquet('%s/messages/**/*.parquet', hive_partitioning=true%s)
 		),
 		mr AS (
-			SELECT * FROM read_parquet('%s/message_recipients/*.parquet')
+			SELECT * FROM read_parquet('%s/message_recipients/*.parquet'%s)
 		),
 		p AS (
-			SELECT * FROM read_parquet('%s/participants/*.parquet')
+			SELECT * FROM read_parquet('%s/participants/*.parquet'%s)
 		)
 		SELECT
 			COUNT(*) as total_messages,
@@ -496,7 +545,7 @@ var cacheStatsCmd = &cobra.Command{
 			MAX(m.year) as max_year,
 			COALESCE(SUM(m.size_estimate), 0) as total_size
 		FROM msg m
-		`, escapedDir, escapedDir, escapedDir)
+		`, escapedDir, encReadOpt, escapedDir, encReadOpt, escapedDir, encReadOpt)
 
 		var totalMessages, sources, uniqueSenders, uniqueDomains int64
 		var minYear, maxYear sql.NullInt64
@@ -520,8 +569,8 @@ var cacheStatsCmd = &cobra.Command{
 		var attachmentSize int64
 		if _, err := os.Stat(attachmentsDir); err == nil {
 			attachSQL := fmt.Sprintf(`
-			SELECT COALESCE(SUM(size), 0) FROM read_parquet('%s/attachments/*.parquet')
-			`, escapedDir)
+			SELECT COALESCE(SUM(size), 0) FROM read_parquet('%s/attachments/*.parquet'%s)
+			`, escapedDir, encReadOpt)
 			_ = db.QueryRow(attachSQL).Scan(&attachmentSize)
 		}
 
@@ -551,11 +600,13 @@ var cacheStatsCmd = &cobra.Command{
 }
 
 // setupSQLiteSource makes SQLite tables available to DuckDB as sqlite_db.*.
-// On Linux/macOS it uses DuckDB's sqlite extension (ATTACH).
+// On Linux/macOS it uses DuckDB's sqlite extension (ATTACH), unless the database
+// is SQLCipher-encrypted (DuckDB's sqlite_scanner cannot read encrypted files).
 // On Windows it exports tables to CSV and creates DuckDB views, since the
 // sqlite_scanner extension is not available for MinGW builds.
 func setupSQLiteSource(duckDB *sql.DB, dbPath string) (cleanup func(), err error) {
-	if runtime.GOOS != "windows" {
+	encrypted := cfg != nil && cfg.Encryption.Enabled
+	if runtime.GOOS != "windows" && !encrypted {
 		// Try sqlite_scanner extension; fall back to CSV if unavailable
 		// (e.g. air-gapped environment with no internet for extension download).
 		if _, err := duckDB.Exec("INSTALL sqlite; LOAD sqlite;"); err != nil {
@@ -579,7 +630,17 @@ func setupSQLiteSource(duckDB *sql.DB, dbPath string) (cleanup func(), err error
 		return nil, err
 	}
 
-	sqliteDB, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	// Build SQLite DSN with encryption key if needed
+	sqliteDSN := dbPath + "?mode=ro"
+	if encrypted {
+		key, keyErr := getEncryptionKey()
+		if keyErr != nil {
+			os.RemoveAll(tmpDir)
+			return nil, fmt.Errorf("get encryption key for CSV export: %w", keyErr)
+		}
+		sqliteDSN += "&_pragma_key=x'" + hex.EncodeToString(key) + "'"
+	}
+	sqliteDB, err := sql.Open("sqlite3", sqliteDSN)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("open sqlite for CSV export: %w", err)
@@ -698,6 +759,27 @@ func exportToCSV(db *sql.DB, query string, dest string) error {
 		return err
 	}
 	return rows.Err()
+}
+
+// getEncryptionKey retrieves the encryption key from the configured provider.
+// Caches the result so repeated calls within a single buildCache invocation
+// don't prompt the user multiple times.
+var cachedEncryptionKey []byte
+
+func getEncryptionKey() ([]byte, error) {
+	if cachedEncryptionKey != nil {
+		return cachedEncryptionKey, nil
+	}
+	provider, err := encryption.NewProvider(cfg.Encryption, cfg.DatabaseDSN())
+	if err != nil {
+		return nil, fmt.Errorf("creating encryption provider: %w", err)
+	}
+	key, err := provider.GetKey(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("retrieving encryption key: %w", err)
+	}
+	cachedEncryptionKey = key
+	return key, nil
 }
 
 func init() {

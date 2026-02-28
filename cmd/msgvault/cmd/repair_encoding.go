@@ -35,8 +35,8 @@ For each invalid field, it:
 This is useful after a sync that may have produced invalid UTF-8 due to
 charset detection issues in the MIME parser.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		// Open database (handles encryption if enabled)
+		s, err := openLocalStore()
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
