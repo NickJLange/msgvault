@@ -4,13 +4,14 @@ package store
 import (
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/mattn/go-sqlite3"
+	sqlite3 "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 //go:embed schema.sql schema_sqlite.sql
@@ -20,7 +21,8 @@ var schemaFS embed.FS
 type Store struct {
 	db            *sql.DB
 	dbPath        string
-	fts5Available bool // Whether FTS5 is available for full-text search
+	fts5Available bool   // Whether FTS5 is available for full-text search
+	encryptionKey []byte // If non-nil, encryption is active (used for file-level encryption)
 }
 
 const defaultSQLiteParams = "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON"
@@ -41,18 +43,23 @@ func isSQLiteError(err error, substr string) bool {
 	return false
 }
 
+// prepareDBPath validates the database path and ensures the parent directory exists.
+func prepareDBPath(dbPath string) error {
+	if strings.HasPrefix(dbPath, "postgresql://") || strings.HasPrefix(dbPath, "postgres://") {
+		return fmt.Errorf("PostgreSQL is not yet supported in the Go implementation; use SQLite path instead")
+	}
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create db directory: %w", err)
+	}
+	return nil
+}
+
 // Open opens or creates the database at the given path.
 // Currently only SQLite is supported. PostgreSQL URLs will return an error.
 func Open(dbPath string) (*Store, error) {
-	// Check for unsupported database URLs
-	if strings.HasPrefix(dbPath, "postgresql://") || strings.HasPrefix(dbPath, "postgres://") {
-		return nil, fmt.Errorf("PostgreSQL is not yet supported in the Go implementation; use SQLite path instead")
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("create db directory: %w", err)
+	if err := prepareDBPath(dbPath); err != nil {
+		return nil, err
 	}
 
 	dsn := dbPath + defaultSQLiteParams
@@ -70,6 +77,46 @@ func Open(dbPath string) (*Store, error) {
 	return &Store{
 		db:     db,
 		dbPath: dbPath,
+	}, nil
+}
+
+// OpenEncrypted opens or creates the database at the given path with SQLCipher
+// encryption. The key must be exactly 32 bytes (256-bit). It is passed to
+// SQLCipher via the _pragma_key DSN parameter as a hex-encoded raw key.
+// The key is also stored on the Store for use with file-level encryption
+// of attachments and tokens.
+func OpenEncrypted(dbPath string, key []byte) (*Store, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("encryption key must be 32 bytes, got %d", len(key))
+	}
+
+	if err := prepareDBPath(dbPath); err != nil {
+		return nil, err
+	}
+
+	// Build DSN with SQLCipher _pragma_key (hex-encoded raw key)
+	// SECURITY: dsn contains the hex-encoded key — never log or include in error messages.
+	hexKey := hex.EncodeToString(key)
+	dsn := dbPath + defaultSQLiteParams + "&_pragma_key=x'" + hexKey + "'"
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open encrypted database: %w", err)
+	}
+
+	// Test connection — if the key is wrong, this will fail with
+	// "file is not a database" because SQLCipher can't decrypt the header.
+	if err := db.Ping(); err != nil {
+		db.Close()
+		if strings.Contains(err.Error(), "file is not a database") {
+			return nil, fmt.Errorf("wrong encryption key or database is not encrypted")
+		}
+		return nil, fmt.Errorf("ping encrypted database: %w", err)
+	}
+
+	return &Store{
+		db:            db,
+		dbPath:        dbPath,
+		encryptionKey: key,
 	}, nil
 }
 
@@ -202,6 +249,21 @@ func (s *Store) Rebind(query string) string {
 	// SQLite uses ? placeholders, no conversion needed
 	// TODO: When adding PostgreSQL support, convert ? to $1, $2, etc.
 	return query
+}
+
+// EncryptionKey returns a copy of the encryption key, or nil if encryption is not active.
+func (s *Store) EncryptionKey() []byte {
+	if s.encryptionKey == nil {
+		return nil
+	}
+	cp := make([]byte, len(s.encryptionKey))
+	copy(cp, s.encryptionKey)
+	return cp
+}
+
+// IsEncrypted returns whether encryption is active for this store.
+func (s *Store) IsEncrypted() bool {
+	return len(s.encryptionKey) > 0
 }
 
 // FTS5Available returns whether FTS5 full-text search is available.
