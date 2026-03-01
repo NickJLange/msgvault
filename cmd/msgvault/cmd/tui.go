@@ -122,9 +122,10 @@ Performance:
 
 		// Create and run TUI
 		model := tui.New(engine, tui.Options{
-			DataDir:   cfg.Data.DataDir,
-			Version:   Version,
-			Encrypted: s.IsEncrypted(),
+			DataDir:       cfg.Data.DataDir,
+			Version:       Version,
+			Encrypted:     s.IsEncrypted(),
+			EncryptionKey: s.EncryptionKey(),
 		})
 		p := tea.NewProgram(model, tea.WithAltScreen())
 

@@ -53,6 +53,9 @@ type Options struct {
 
 	// Encrypted indicates database encryption is active (shows 🔒 in footer).
 	Encrypted bool
+
+	// EncryptionKey is the optional key for decrypting attachments.
+	EncryptionKey []byte
 }
 
 // modalType represents the type of modal dialog.
@@ -218,7 +221,7 @@ func New(engine query.Engine, opts Options) Model {
 
 	return Model{
 		engine:             engine,
-		actions:            NewActionController(engine, opts.DataDir, nil),
+		actions:            NewActionController(engine, opts.DataDir, nil).WithEncryptionKey(opts.EncryptionKey),
 		version:            opts.Version,
 		encrypted:          opts.Encrypted,
 		aggregateLimit:     aggLimit,

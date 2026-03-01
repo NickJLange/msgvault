@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wesm/msgvault/internal/encryption"
 	"github.com/wesm/msgvault/internal/fileutil"
 	"github.com/wesm/msgvault/internal/gmail"
 	"github.com/wesm/msgvault/internal/mime"
@@ -660,7 +661,15 @@ func (s *Syncer) storeAttachment(messageID int64, att *mime.Attachment) error {
 
 	// Write file if it doesn't exist (deduplication)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		if err := fileutil.SecureWriteFile(fullPath, att.Content, 0600); err != nil {
+		data := att.Content
+		if s.store.IsEncrypted() {
+			var encErr error
+			data, encErr = encryption.EncryptBytes(s.store.EncryptionKey(), att.Content)
+			if encErr != nil {
+				return fmt.Errorf("encrypt attachment: %w", encErr)
+			}
+		}
+		if err := fileutil.SecureWriteFile(fullPath, data, 0600); err != nil {
 			return err
 		}
 	}
