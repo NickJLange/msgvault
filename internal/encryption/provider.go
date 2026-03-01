@@ -1,3 +1,4 @@
+// Package encryption provides encryption key management for msgvault.
 package encryption
 
 import (
