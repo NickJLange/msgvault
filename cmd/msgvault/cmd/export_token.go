@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wesm/msgvault/internal/encryption"
 )
 
 var (
@@ -110,6 +111,23 @@ func (e *tokenExporter) export(
 	tokenData, err := os.ReadFile(tokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read token: %w", err)
+	}
+
+	// Decrypt if locally encrypted
+	if cfg.Encryption.Enabled {
+		s, err := openLocalStore(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("open local database: %w", err)
+		}
+		defer s.Close()
+		key := s.EncryptionKey()
+		if len(key) > 0 && encryption.IsEncrypted(tokenData) {
+			decrypted, err := encryption.DecryptBytes(key, tokenData)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt local token: %w", err)
+			}
+			tokenData = decrypted
+		}
 	}
 
 	baseURL := strings.TrimSuffix(remoteURL, "/")
