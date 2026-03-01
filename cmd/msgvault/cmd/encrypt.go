@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	_ "github.com/mutecomm/go-sqlcipher/v4"
@@ -17,13 +16,8 @@ import (
 
 var encryptCmd = &cobra.Command{
 	Use:   "encrypt",
-	Short: "Encrypt existing data files",
-	Long: `Encrypt existing data at rest using SQLCipher and AES-256-GCM.
-
-This command encrypts:
-  - SQLite database (SQLCipher with _pragma_key)
-  - Attachment files (AES-256-GCM)
-  - OAuth token files (AES-256-GCM)
+	Short: "Encrypt existing database",
+	Long: `Encrypt the existing SQLite database at rest using SQLCipher.
 
 If no encryption key exists, it generates one and stores it using the configured
 provider (default: OS keyring).`,
@@ -81,58 +75,6 @@ provider (default: OS keyring).`,
 			fmt.Println("  Database encrypted successfully")
 		}
 
-		var filesEncrypted int
-
-		// Encrypt token files
-		tokensDir := cfg.TokensDir()
-		if entries, err := os.ReadDir(tokensDir); err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-					continue
-				}
-				path := filepath.Join(tokensDir, entry.Name())
-				data, err := os.ReadFile(path)
-				if err != nil {
-					logger.Warn("skipping token file", "path", path, "err", err)
-					continue
-				}
-				if encryption.IsEncrypted(data) {
-					continue
-				}
-				if err := encryption.EncryptFile(key, path, path); err != nil {
-					return fmt.Errorf("encrypting token %s: %w", entry.Name(), err)
-				}
-				filesEncrypted++
-				logger.Info("encrypted token file", "path", path)
-			}
-		}
-
-		// Encrypt attachment files
-		attachDir := cfg.AttachmentsDir()
-		if err := filepath.Walk(attachDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if info.IsDir() {
-				return nil
-			}
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				logger.Warn("skipping attachment", "path", path, "err", readErr)
-				return nil
-			}
-			if encryption.IsEncrypted(data) {
-				return nil
-			}
-			if err := encryption.EncryptFile(key, path, path); err != nil {
-				return fmt.Errorf("encrypting attachment %s: %w", path, err)
-			}
-			filesEncrypted++
-			return nil
-		}); err != nil {
-			return fmt.Errorf("encrypting attachments: %w", err)
-		}
-
 		// Update config
 		cfg.Encryption.Enabled = true
 		if cfg.Encryption.Provider == "" {
@@ -142,7 +84,7 @@ provider (default: OS keyring).`,
 			return fmt.Errorf("saving config: %w", err)
 		}
 
-		fmt.Printf("✅ Encryption enabled (encrypted %d files)\n", filesEncrypted)
+		fmt.Printf("✅ Encryption enabled for database\n")
 		fmt.Printf("   Fingerprint: %s\n", encryption.KeyFingerprint(key))
 		fmt.Printf("\n⚠️  Back up your key: msgvault key export --out ~/msgvault-key-backup.txt\n")
 
@@ -152,11 +94,11 @@ provider (default: OS keyring).`,
 
 var decryptCmd = &cobra.Command{
 	Use:   "decrypt",
-	Short: "Decrypt data files for export or migration",
-	Long: `Decrypt data files that were encrypted by msgvault.
+	Short: "Decrypt database for export or migration",
+	Long: `Decrypt the SQLite database that was encrypted by msgvault.
 
 This command reverses the encryption applied by 'msgvault encrypt', restoring
-the SQLite database, attachments, and tokens to their original unencrypted state.`,
+the SQLite database to its original unencrypted state.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := MustBeLocal("decrypt"); err != nil {
 			return err
@@ -186,65 +128,13 @@ the SQLite database, attachments, and tokens to their original unencrypted state
 			fmt.Println("  Database decrypted successfully")
 		}
 
-		var filesDecrypted int
-
-		// Decrypt token files
-		tokensDir := cfg.TokensDir()
-		if entries, err := os.ReadDir(tokensDir); err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-					continue
-				}
-				path := filepath.Join(tokensDir, entry.Name())
-				data, err := os.ReadFile(path)
-				if err != nil {
-					logger.Warn("skipping token file", "path", path, "err", err)
-					continue
-				}
-				if !encryption.IsEncrypted(data) {
-					continue
-				}
-				if err := encryption.DecryptFile(key, path, path); err != nil {
-					return fmt.Errorf("decrypting token %s: %w", entry.Name(), err)
-				}
-				filesDecrypted++
-				logger.Info("decrypted token file", "path", path)
-			}
-		}
-
-		// Decrypt attachment files
-		attachDir := cfg.AttachmentsDir()
-		if err := filepath.Walk(attachDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if info.IsDir() {
-				return nil
-			}
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				logger.Warn("skipping attachment", "path", path, "err", readErr)
-				return nil
-			}
-			if !encryption.IsEncrypted(data) {
-				return nil
-			}
-			if err := encryption.DecryptFile(key, path, path); err != nil {
-				return fmt.Errorf("decrypting attachment %s: %w", path, err)
-			}
-			filesDecrypted++
-			return nil
-		}); err != nil {
-			return fmt.Errorf("decrypting attachments: %w", err)
-		}
-
 		// Update config
 		cfg.Encryption.Enabled = false
 		if err := cfg.Save(); err != nil {
 			return fmt.Errorf("saving config: %w", err)
 		}
 
-		fmt.Printf("✅ Decrypted %d files\n", filesDecrypted)
+		fmt.Printf("✅ Database decrypted\n")
 		return nil
 	},
 }

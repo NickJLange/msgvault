@@ -18,15 +18,14 @@ import (
 var rotateKeyCmd = &cobra.Command{
 	Use:   "rotate",
 	Short: "Rotate the encryption key",
-	Long: `Generate a new encryption key and re-encrypt all data.
+	Long: `Generate a new encryption key and re-encrypt the database.
 
 This command:
   1. Retrieves the current encryption key
   2. Generates a new 256-bit key
-  3. Re-keys the SQLCipher database (PRAGMA rekey)
-  4. Re-encrypts attachment and token files
-  5. Stores the new key in the configured provider
-  6. Deletes the Parquet cache (rebuild with new key on next TUI launch)
+  3. Re-keys the SQLCipher database (sqlcipher_export)
+  4. Stores the new key in the configured provider
+  5. Deletes the Parquet cache (rebuild with new key on next TUI launch)
 
 The old key is no longer valid after rotation.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -65,41 +64,6 @@ The old key is no longer valid after rotation.`,
 				return fmt.Errorf("re-keying database: %w", err)
 			}
 			fmt.Println("  Database re-keyed successfully")
-		}
-
-		var filesRotated int
-
-		// Re-encrypt token files
-		tokensDir := cfg.TokensDir()
-		if entries, err := os.ReadDir(tokensDir); err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-					continue
-				}
-				path := filepath.Join(tokensDir, entry.Name())
-				if err := reencryptFile(oldKey, newKey, path); err != nil {
-					return fmt.Errorf("re-encrypting token %s: %w", entry.Name(), err)
-				}
-				filesRotated++
-			}
-		}
-
-		// Re-encrypt attachment files
-		attachDir := cfg.AttachmentsDir()
-		if err := filepath.Walk(attachDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return fmt.Errorf("accessing %s: %w", path, err)
-			}
-			if info.IsDir() {
-				return nil
-			}
-			if err := reencryptFile(oldKey, newKey, path); err != nil {
-				return fmt.Errorf("re-encrypting attachment %s: %w", path, err)
-			}
-			filesRotated++
-			return nil
-		}); err != nil {
-			return fmt.Errorf("re-encrypting attachments: %w", err)
 		}
 
 		// Delete Parquet cache (will be rebuilt with new key on next TUI launch)
@@ -160,7 +124,6 @@ The old key is no longer valid after rotation.`,
 		fmt.Printf("\n✅ Key rotated successfully\n")
 		fmt.Printf("   Old fingerprint: %s\n", encryption.KeyFingerprint(oldKey))
 		fmt.Printf("   New fingerprint: %s\n", encryption.KeyFingerprint(newKey))
-		fmt.Printf("   Files re-encrypted: %d\n", filesRotated)
 		fmt.Printf("\n⚠️  Back up your new key: msgvault key export --out ~/msgvault-key-backup.txt\n")
 
 		return nil
@@ -220,51 +183,6 @@ func rekeyDatabase(dbPath string, oldKey, newKey []byte) error {
 	os.Remove(newDBPath + "-wal")
 	os.Remove(newDBPath + "-shm")
 
-	return nil
-}
-
-// reencryptFile decrypts a file with oldKey and re-encrypts with newKey.
-// Skips files that don't appear to be encrypted.
-func reencryptFile(oldKey, newKey []byte, path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading file: %w", err)
-	}
-	if !encryption.IsEncrypted(data) {
-		return nil
-	}
-
-	plaintext, err := encryption.DecryptBytes(oldKey, data)
-	if err != nil {
-		return fmt.Errorf("decrypting: %w", err)
-	}
-
-	encrypted, err := encryption.EncryptBytes(newKey, plaintext)
-	if err != nil {
-		return fmt.Errorf("re-encrypting: %w", err)
-	}
-
-	// Atomic write: temp file + rename
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".reenc-*")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-
-	if _, err := tmp.Write(encrypted); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-	if err := fileutil.AtomicRename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("renaming temp file: %w", err)
-	}
 	return nil
 }
 
