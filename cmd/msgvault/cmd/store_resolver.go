@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"github.com/wesm/msgvault/internal/encryption"
 	"github.com/wesm/msgvault/internal/remote"
 	"github.com/wesm/msgvault/internal/store"
 )
@@ -39,11 +41,11 @@ func IsRemoteMode() bool {
 // OpenStore returns either a local or remote store based on configuration.
 // If [remote].url is set in config and --local is not specified, uses remote.
 // Otherwise uses local SQLite database.
-func OpenStore() (MessageStore, error) {
+func OpenStore(ctx context.Context) (MessageStore, error) {
 	if IsRemoteMode() {
 		return openRemoteStore()
 	}
-	return openLocalStore()
+	return openLocalStore(ctx)
 }
 
 // OpenRemoteStore opens a remote store, returning error if not configured.
@@ -61,8 +63,23 @@ func OpenRemoteStore() (RemoteStore, error) {
 }
 
 // openLocalStore opens the local SQLite database.
-func openLocalStore() (*store.Store, error) {
+// If encryption is enabled in config, it retrieves the key from the configured
+// provider and opens with SQLCipher encryption.
+func openLocalStore(ctx context.Context) (*store.Store, error) {
 	dbPath := cfg.DatabaseDSN()
+
+	if cfg.Encryption.Enabled {
+		provider, err := encryption.NewProvider(cfg.Encryption, dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("creating encryption provider: %w", err)
+		}
+		key, err := provider.GetKey(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("retrieving encryption key: %w", err)
+		}
+		return store.OpenEncrypted(dbPath, key)
+	}
+
 	return store.Open(dbPath)
 }
 
@@ -80,9 +97,7 @@ func openRemoteStore() (*remote.Store, error) {
 // Use this for commands that only work with local database.
 func MustBeLocal(cmdName string) error {
 	if IsRemoteMode() && !useLocal {
-		return fmt.Errorf("%s requires local database\n\n"+
-			"This command cannot run against a remote server.\n"+
-			"Use --local flag to force local database.", cmdName)
+		return fmt.Errorf("%s requires local database: this command cannot run against a remote server. Use --local flag to force local database", cmdName)
 	}
 	return nil
 }

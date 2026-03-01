@@ -15,7 +15,6 @@ import (
 	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/gmail"
 	"github.com/wesm/msgvault/internal/oauth"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var listDeletionsCmd = &cobra.Command{
@@ -344,13 +343,15 @@ Examples:
 			}
 		}
 
-		// Open database
-		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		// Open database (handles encryption if enabled)
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
 		defer s.Close()
+
+		// Get database path for cache rebuild
+		dbPath := cfg.DatabaseDSN()
 
 		// Ensure schema is up to date (creates new indexes, etc.)
 		if err := s.InitSchema(); err != nil {

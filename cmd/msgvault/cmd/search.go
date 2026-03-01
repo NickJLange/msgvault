@@ -105,9 +105,8 @@ func runLocalSearch(cmd *cobra.Command, queryStr string) error {
 
 	fmt.Fprintf(os.Stderr, "Searching...")
 
-	// Open database
-	dbPath := cfg.DatabaseDSN()
-	s, err := store.Open(dbPath)
+	// Open database (handles encryption if enabled)
+	s, err := openLocalStore(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

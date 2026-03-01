@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/oauth"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var (
@@ -40,9 +39,8 @@ Examples:
 			return errOAuthNotConfigured()
 		}
 
-		// Initialize database (in case it's new)
-		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		// Initialize database (in case it's new, handles encryption if enabled)
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

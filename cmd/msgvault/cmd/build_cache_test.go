@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/duckdb/duckdb-go/v2"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // setupTestSQLite creates a test SQLite database with realistic email data.
@@ -1679,13 +1679,15 @@ func TestCacheNeedsBuild(t *testing.T) {
 			wantReason: "invalid sync state",
 		},
 		{
-			name: "DBOpenFailure_NeedsBuild",
+			name: "DBQueryFailure_NeedsBuild",
 			setup: func(t *testing.T, dbPath, analyticsDir string) {
-				// Replace DB file with a directory so store.Open fails
-				os.Remove(dbPath)
-				if err := os.MkdirAll(dbPath, 0755); err != nil {
-					t.Fatalf("MkdirAll: %v", err)
+				// Drop the messages table so the query fails
+				db, err := sql.Open("sqlite3", dbPath)
+				if err != nil {
+					t.Fatalf("open db: %v", err)
 				}
+				defer db.Close()
+				_, _ = db.Exec(`DROP TABLE IF EXISTS messages`)
 				writeSyncState(t, analyticsDir, 5)
 				createFakeParquet(t, analyticsDir)
 			},
@@ -1730,7 +1732,13 @@ func TestCacheNeedsBuild(t *testing.T) {
 
 			tt.setup(t, dbPath, analyticsDir)
 
-			gotBuild, gotReason := cacheNeedsBuild(dbPath, analyticsDir)
+			db, err := sql.Open("sqlite3", dbPath)
+			if err != nil {
+				t.Fatalf("open db for cacheNeedsBuild: %v", err)
+			}
+			defer db.Close()
+
+			gotBuild, gotReason := cacheNeedsBuild(db, analyticsDir)
 			if gotBuild != tt.wantBuild {
 				t.Errorf("cacheNeedsBuild() build = %v, want %v (reason: %q)", gotBuild, tt.wantBuild, gotReason)
 			}

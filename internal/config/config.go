@@ -68,15 +68,45 @@ type RemoteConfig struct {
 	AllowInsecure bool   `toml:"allow_insecure"` // Allow HTTP (insecure) for trusted networks
 }
 
+// EncryptionConfig holds encryption-at-rest configuration.
+type EncryptionConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	Provider string `toml:"provider"` // keyring | passphrase | keyfile | env | vault | exec
+
+	Keyfile KeyfileConfig `toml:"keyfile"`
+	Vault   VaultConfig   `toml:"vault"`
+	Exec    ExecConfig    `toml:"exec"`
+}
+
+// KeyfileConfig holds keyfile provider configuration.
+type KeyfileConfig struct {
+	Path string `toml:"path"`
+}
+
+// VaultConfig holds HashiCorp Vault provider configuration.
+type VaultConfig struct {
+	Address    string `toml:"address"`
+	Path       string `toml:"path"`        // KV v2 path
+	Field      string `toml:"field"`       // field name within the secret
+	AuthMethod string `toml:"auth_method"` // token | approle
+	TokenPath  string `toml:"token_path"`
+}
+
+// ExecConfig holds external command provider configuration.
+type ExecConfig struct {
+	Command string `toml:"command"`
+}
+
 // Config represents the msgvault configuration.
 type Config struct {
-	Data     DataConfig        `toml:"data"`
-	OAuth    OAuthConfig       `toml:"oauth"`
-	Sync     SyncConfig        `toml:"sync"`
-	Chat     ChatConfig        `toml:"chat"`
-	Server   ServerConfig      `toml:"server"`
-	Remote   RemoteConfig      `toml:"remote"`
-	Accounts []AccountSchedule `toml:"accounts"`
+	Data       DataConfig        `toml:"data"`
+	OAuth      OAuthConfig       `toml:"oauth"`
+	Sync       SyncConfig        `toml:"sync"`
+	Chat       ChatConfig        `toml:"chat"`
+	Server     ServerConfig      `toml:"server"`
+	Remote     RemoteConfig      `toml:"remote"`
+	Encryption EncryptionConfig  `toml:"encryption"`
+	Accounts   []AccountSchedule `toml:"accounts"`
 
 	// Computed paths (not from config file)
 	HomeDir    string `toml:"-"`
@@ -194,12 +224,16 @@ func Load(path, homeDir string) (*Config, error) {
 	// Expand ~ in paths
 	cfg.Data.DataDir = expandPath(cfg.Data.DataDir)
 	cfg.OAuth.ClientSecrets = expandPath(cfg.OAuth.ClientSecrets)
+	cfg.Encryption.Keyfile.Path = expandPath(cfg.Encryption.Keyfile.Path)
+	cfg.Encryption.Vault.TokenPath = expandPath(cfg.Encryption.Vault.TokenPath)
 
 	// When --config is used, resolve relative paths against the config file's
 	// directory so behavior doesn't depend on the working directory.
 	if explicit {
 		cfg.Data.DataDir = resolveRelative(cfg.Data.DataDir, cfg.HomeDir)
 		cfg.OAuth.ClientSecrets = resolveRelative(cfg.OAuth.ClientSecrets, cfg.HomeDir)
+		cfg.Encryption.Keyfile.Path = resolveRelative(cfg.Encryption.Keyfile.Path, cfg.HomeDir)
+		cfg.Encryption.Vault.TokenPath = resolveRelative(cfg.Encryption.Vault.TokenPath, cfg.HomeDir)
 	}
 
 	return cfg, nil
