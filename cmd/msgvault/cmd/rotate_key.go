@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/encryption"
+	"github.com/wesm/msgvault/internal/fileutil"
 )
 
 var rotateKeyCmd = &cobra.Command{
@@ -122,7 +124,31 @@ The old key is no longer valid after rotation.`,
 				return fmt.Errorf("keyfile path not configured")
 			}
 			encoded := encodeKeyBase64(newKey)
-			if err := os.WriteFile(path, []byte(encoded+"\n"), 0600); err != nil {
+
+			// Atomic write: temp file + rename
+			dir := filepath.Dir(path)
+			tmp, err := os.CreateTemp(dir, ".keyfile-*")
+			if err != nil {
+				return fmt.Errorf("creating temp keyfile: %w", err)
+			}
+			tmpPath := tmp.Name()
+
+			if _, err := tmp.Write([]byte(encoded + "\n")); err != nil {
+				tmp.Close()
+				os.Remove(tmpPath)
+				return fmt.Errorf("writing temp keyfile: %w", err)
+			}
+			if err := tmp.Chmod(0600); err != nil {
+				tmp.Close()
+				os.Remove(tmpPath)
+				return fmt.Errorf("setting keyfile permissions: %w", err)
+			}
+			if err := tmp.Close(); err != nil {
+				os.Remove(tmpPath)
+				return fmt.Errorf("closing temp keyfile: %w", err)
+			}
+			if err := os.Rename(tmpPath, path); err != nil {
+				os.Remove(tmpPath)
 				return fmt.Errorf("writing new key to keyfile: %w", err)
 			}
 		default:
@@ -141,8 +167,12 @@ The old key is no longer valid after rotation.`,
 	},
 }
 
-// rekeyDatabase changes the encryption key on a SQLCipher database using PRAGMA rekey.
+// rekeyDatabase changes the encryption key on a SQLCipher database by exporting
+// to a new encrypted database and then swapping files.
 func rekeyDatabase(dbPath string, oldKey, newKey []byte) error {
+	newDBPath := dbPath + ".rotated"
+	os.Remove(newDBPath) // Clean up any failed attempt
+
 	oldHex := hex.EncodeToString(oldKey)
 	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&_pragma_key=x'%s'", dbPath, oldHex)
 	db, err := sql.Open("sqlite3", dsn)
@@ -155,10 +185,40 @@ func rekeyDatabase(dbPath string, oldKey, newKey []byte) error {
 		return fmt.Errorf("cannot read database (wrong key?): %w", err)
 	}
 
+	// Attach the new database with the new key
 	newHex := hex.EncodeToString(newKey)
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA rekey = \"x'%s'\"", newHex)); err != nil {
-		return fmt.Errorf("PRAGMA rekey: %w", err)
+	attachSQL := fmt.Sprintf("ATTACH DATABASE '%s' AS new_db KEY \"x'%s'\"",
+		strings.ReplaceAll(newDBPath, "'", "''"), newHex)
+	if _, err := db.Exec(attachSQL); err != nil {
+		return fmt.Errorf("attach new database: %w", err)
 	}
+
+	// Export all data to the new database
+	if _, err := db.Exec("SELECT sqlcipher_export('new_db')"); err != nil {
+		os.Remove(newDBPath)
+		return fmt.Errorf("sqlcipher_export: %w", err)
+	}
+
+	// Copy WAL mode
+	if _, err := db.Exec("PRAGMA new_db.journal_mode = WAL"); err != nil {
+		logger.Warn("failed to set WAL on new database", "err", err)
+	}
+
+	// Detach
+	if _, err := db.Exec("DETACH DATABASE new_db"); err != nil {
+		os.Remove(newDBPath)
+		return fmt.Errorf("detach new database: %w", err)
+	}
+	db.Close()
+
+	// Swap files
+	os.Remove(dbPath + "-wal")
+	os.Remove(dbPath + "-shm")
+	if err := fileutil.AtomicRename(newDBPath, dbPath); err != nil {
+		return fmt.Errorf("swap rotated database: %w", err)
+	}
+	os.Remove(newDBPath + "-wal")
+	os.Remove(newDBPath + "-shm")
 
 	return nil
 }
@@ -201,7 +261,7 @@ func reencryptFile(oldKey, newKey []byte, path string) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("closing temp file: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := fileutil.AtomicRename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("renaming temp file: %w", err)
 	}

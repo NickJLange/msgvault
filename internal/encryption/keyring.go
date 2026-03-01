@@ -28,7 +28,7 @@ func (p *KeyringProvider) GetKey(ctx context.Context) ([]byte, error) {
 	encoded, err := keyring.Get(keyringService, p.dbPath)
 	if err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
-			return nil, fmt.Errorf("no encryption key found in OS keyring for %q", p.dbPath)
+			return nil, fmt.Errorf("%w for %q: %v", ErrKeyNotFound, p.dbPath, err)
 		}
 		return nil, fmt.Errorf("reading key from OS keyring: %w", err)
 	}

@@ -224,12 +224,16 @@ func Load(path, homeDir string) (*Config, error) {
 	// Expand ~ in paths
 	cfg.Data.DataDir = expandPath(cfg.Data.DataDir)
 	cfg.OAuth.ClientSecrets = expandPath(cfg.OAuth.ClientSecrets)
+	cfg.Encryption.Keyfile.Path = expandPath(cfg.Encryption.Keyfile.Path)
+	cfg.Encryption.Vault.TokenPath = expandPath(cfg.Encryption.Vault.TokenPath)
 
 	// When --config is used, resolve relative paths against the config file's
 	// directory so behavior doesn't depend on the working directory.
 	if explicit {
 		cfg.Data.DataDir = resolveRelative(cfg.Data.DataDir, cfg.HomeDir)
 		cfg.OAuth.ClientSecrets = resolveRelative(cfg.OAuth.ClientSecrets, cfg.HomeDir)
+		cfg.Encryption.Keyfile.Path = resolveRelative(cfg.Encryption.Keyfile.Path, cfg.HomeDir)
+		cfg.Encryption.Vault.TokenPath = resolveRelative(cfg.Encryption.Vault.TokenPath, cfg.HomeDir)
 	}
 
 	return cfg, nil

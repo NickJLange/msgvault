@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "github.com/mutecomm/go-sqlcipher/v4"
 	"github.com/spf13/cobra"
@@ -45,15 +47,19 @@ provider (default: OS keyring).`,
 			var err error
 			key, err = p.GetKey(context.Background())
 			if err != nil {
-				// No existing key — generate one
-				key, err = encryption.GenerateKey()
-				if err != nil {
-					return fmt.Errorf("generating key: %w", err)
+				if errors.Is(err, encryption.ErrKeyNotFound) {
+					// No existing key — generate one
+					key, err = encryption.GenerateKey()
+					if err != nil {
+						return fmt.Errorf("generating key: %w", err)
+					}
+					if err := p.SetKey(key); err != nil {
+						return fmt.Errorf("storing key: %w", err)
+					}
+					fmt.Printf("🔑 Generated new encryption key (stored in OS keyring)\n")
+				} else {
+					return fmt.Errorf("retrieving key from keyring: %w", err)
 				}
-				if err := p.SetKey(key); err != nil {
-					return fmt.Errorf("storing key: %w", err)
-				}
-				fmt.Printf("🔑 Generated new encryption key (stored in OS keyring)\n")
 			}
 		default:
 			p, err := encryption.NewProvider(cfg.Encryption, dbPath)
@@ -105,8 +111,7 @@ provider (default: OS keyring).`,
 		attachDir := cfg.AttachmentsDir()
 		if err := filepath.Walk(attachDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				logger.Warn("skipping path", "path", path, "err", err)
-				return nil
+				return err
 			}
 			if info.IsDir() {
 				return nil
@@ -211,8 +216,7 @@ the SQLite database, attachments, and tokens to their original unencrypted state
 		attachDir := cfg.AttachmentsDir()
 		if err := filepath.Walk(attachDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				logger.Warn("skipping path", "path", path, "err", err)
-				return nil
+				return err
 			}
 			if info.IsDir() {
 				return nil
@@ -268,7 +272,7 @@ func encryptDatabase(dbPath string, key []byte) error {
 	// Attach the encrypted target with the key
 	hexKey := hex.EncodeToString(key)
 	attachSQL := fmt.Sprintf("ATTACH DATABASE '%s' AS encrypted KEY \"x'%s'\"",
-		encryptedPath, hexKey)
+		strings.ReplaceAll(encryptedPath, "'", "''"), hexKey)
 	if _, err := db.Exec(attachSQL); err != nil {
 		return fmt.Errorf("attach encrypted db: %w", err)
 	}
@@ -329,7 +333,8 @@ func decryptDatabase(dbPath string, key []byte) error {
 	}
 
 	// Attach the plaintext target (empty key = no encryption)
-	attachSQL := fmt.Sprintf("ATTACH DATABASE '%s' AS plaintext KEY ''", plainPath)
+	attachSQL := fmt.Sprintf("ATTACH DATABASE '%s' AS plaintext KEY ''",
+		strings.ReplaceAll(plainPath, "'", "''"))
 	if _, err := db.Exec(attachSQL); err != nil {
 		return fmt.Errorf("attach plaintext db: %w", err)
 	}

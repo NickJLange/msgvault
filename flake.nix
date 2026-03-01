@@ -33,7 +33,7 @@
             proxyVendor = true;
             subPackages = [ "cmd/msgvault" ];
             tags = [ "fts5" ];
-            cflags = [ "-DSQLITE_ENABLE_FTS5" ];
+            CGO_CFLAGS = "-DSQLITE_ENABLE_FTS5";
             ldflags = [
               "-X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=nix-dev"
             ];

@@ -75,7 +75,7 @@ func showRemoteMessage(idStr string) error {
 // showLocalMessage fetches and displays a message from the local database.
 func showLocalMessage(cmd *cobra.Command, idStr string) error {
 	// Open database (handles encryption if enabled)
-	s, err := openLocalStore()
+	s, err := openLocalStore(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

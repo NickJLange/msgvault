@@ -78,7 +78,7 @@ func TestKeyFingerprint(t *testing.T) {
 // --- keyfile provider tests ---
 
 func TestKeyfileProvider_GetKey(t *testing.T) {
-	key, _ := GenerateKey()
+	key, err := GenerateKey(); if err != nil { t.Fatalf("GenerateKey: %v", err) }
 	encoded := base64.StdEncoding.EncodeToString(key)
 
 	path := filepath.Join(t.TempDir(), "test.key")
@@ -139,7 +139,7 @@ func TestKeyfileProvider_InvalidBase64(t *testing.T) {
 // --- env provider tests ---
 
 func TestEnvProvider_GetKey(t *testing.T) {
-	key, _ := GenerateKey()
+	key, err := GenerateKey(); if err != nil { t.Fatalf("GenerateKey: %v", err) }
 	encoded := base64.StdEncoding.EncodeToString(key)
 	t.Setenv("TEST_ENCRYPTION_KEY", encoded)
 

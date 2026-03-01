@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -27,7 +28,14 @@ func (p *ExecProvider) GetKey(ctx context.Context) ([]byte, error) {
 		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, "sh", "-c", p.command)
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "cmd", "/c", p.command)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", p.command)
+	}
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

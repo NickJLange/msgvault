@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/wesm/msgvault/internal/fileutil"
 )
 
 const (
@@ -122,7 +124,7 @@ func EncryptFile(key []byte, srcPath, dstPath string) error {
 		return fmt.Errorf("encryption: closing temp file: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, dstPath); err != nil {
+	if err := fileutil.AtomicRename(tmpPath, dstPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("encryption: renaming temp file: %w", err)
 	}
@@ -165,7 +167,7 @@ func DecryptFile(key []byte, srcPath, dstPath string) error {
 		return fmt.Errorf("encryption: closing temp file: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, dstPath); err != nil {
+	if err := fileutil.AtomicRename(tmpPath, dstPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("encryption: renaming temp file: %w", err)
 	}

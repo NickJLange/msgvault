@@ -172,9 +172,9 @@ func buildCache(dbPath, analyticsDir string, fullRebuild bool) (*buildResult, er
 			return nil, fmt.Errorf("get encryption key for parquet: %w", keyErr)
 		}
 		// DuckDB Parquet encryption requires a 128, 192, or 256-bit key.
-		// Use the first 32 bytes of our master key (256-bit).
+		// Use our 256-bit master key.
 		// Base64-encode the binary key for safe SQL representation
-		parquetKeyB64 := base64.StdEncoding.EncodeToString(key[:32])
+		parquetKeyB64 := base64.StdEncoding.EncodeToString(key)
 		pragmaSQL := fmt.Sprintf("PRAGMA add_parquet_key('msgvault_key', '%s')", parquetKeyB64)
 		if _, err := db.Exec(pragmaSQL); err != nil {
 			return nil, fmt.Errorf("register parquet encryption key: %w", err)
@@ -510,7 +510,7 @@ var cacheStatsCmd = &cobra.Command{
 			if keyErr != nil {
 				return fmt.Errorf("get encryption key for cache stats: %w", keyErr)
 			}
-			parquetKeyB64 := base64.StdEncoding.EncodeToString(key[:32])
+			parquetKeyB64 := base64.StdEncoding.EncodeToString(key)
 			pragmaSQL := fmt.Sprintf("PRAGMA add_parquet_key('msgvault_key', '%s')", parquetKeyB64)
 			if _, err := db.Exec(pragmaSQL); err != nil {
 				return fmt.Errorf("register parquet encryption key: %w", err)
@@ -777,6 +777,9 @@ func getEncryptionKey() ([]byte, error) {
 	key, err := provider.GetKey(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("retrieving encryption key: %w", err)
+	}
+	if err := encryption.ValidateKey(key); err != nil {
+		return nil, fmt.Errorf("invalid encryption key: %w", err)
 	}
 	cachedEncryptionKey = key
 	return key, nil

@@ -40,7 +40,7 @@ Examples:
 		}
 
 		// Initialize database (in case it's new, handles encryption if enabled)
-		s, err := openLocalStore()
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

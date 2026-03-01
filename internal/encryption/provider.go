@@ -1,12 +1,15 @@
-// Package encryption provides encryption key management for msgvault.
 package encryption
 
 import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 )
+
+// ErrKeyNotFound is returned when a KeyProvider cannot find the encryption key.
+var ErrKeyNotFound = errors.New("encryption key not found")
 
 // KeySize is the required key length in bytes (256 bits).
 const KeySize = 32

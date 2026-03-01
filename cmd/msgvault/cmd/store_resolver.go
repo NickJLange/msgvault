@@ -41,11 +41,11 @@ func IsRemoteMode() bool {
 // OpenStore returns either a local or remote store based on configuration.
 // If [remote].url is set in config and --local is not specified, uses remote.
 // Otherwise uses local SQLite database.
-func OpenStore() (MessageStore, error) {
+func OpenStore(ctx context.Context) (MessageStore, error) {
 	if IsRemoteMode() {
 		return openRemoteStore()
 	}
-	return openLocalStore()
+	return openLocalStore(ctx)
 }
 
 // OpenRemoteStore opens a remote store, returning error if not configured.
@@ -65,7 +65,7 @@ func OpenRemoteStore() (RemoteStore, error) {
 // openLocalStore opens the local SQLite database.
 // If encryption is enabled in config, it retrieves the key from the configured
 // provider and opens with SQLCipher encryption.
-func openLocalStore() (*store.Store, error) {
+func openLocalStore(ctx context.Context) (*store.Store, error) {
 	dbPath := cfg.DatabaseDSN()
 
 	if cfg.Encryption.Enabled {
@@ -73,7 +73,7 @@ func openLocalStore() (*store.Store, error) {
 		if err != nil {
 			return nil, fmt.Errorf("creating encryption provider: %w", err)
 		}
-		key, err := provider.GetKey(context.Background())
+		key, err := provider.GetKey(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("retrieving encryption key: %w", err)
 		}

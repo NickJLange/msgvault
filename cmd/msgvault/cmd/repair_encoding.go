@@ -36,7 +36,7 @@ This is useful after a sync that may have produced invalid UTF-8 due to
 charset detection issues in the MIME parser.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Open database (handles encryption if enabled)
-		s, err := openLocalStore()
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

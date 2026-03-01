@@ -134,13 +134,13 @@ func NewDuckDBEngine(analyticsDir string, sqlitePath string, sqliteDB *sql.DB, o
 	// Register Parquet encryption key if provided
 	var parquetEncrypted bool
 	if len(opt.EncryptionKey) > 0 {
-		if len(opt.EncryptionKey) < 32 {
+		if len(opt.EncryptionKey) != 32 {
 			db.Close()
-			return nil, fmt.Errorf("encryption key must be at least 32 bytes, got %d", len(opt.EncryptionKey))
+			return nil, fmt.Errorf("encryption key must be exactly 32 bytes, got %d", len(opt.EncryptionKey))
 		}
 		// Base64-encode the binary key for DuckDB Parquet Modular Encryption
 		// DuckDB's add_parquet_key accepts base64-encoded keys
-		parquetKeyB64 := base64.StdEncoding.EncodeToString(opt.EncryptionKey[:32])
+		parquetKeyB64 := base64.StdEncoding.EncodeToString(opt.EncryptionKey)
 		pragmaSQL := fmt.Sprintf("PRAGMA add_parquet_key('msgvault_key', '%s')", parquetKeyB64)
 		if _, err := db.Exec(pragmaSQL); err != nil {
 			db.Close()

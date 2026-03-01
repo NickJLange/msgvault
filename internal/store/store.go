@@ -113,10 +113,12 @@ func OpenEncrypted(dbPath string, key []byte) (*Store, error) {
 		return nil, fmt.Errorf("ping encrypted database: %w", err)
 	}
 
+	keyCopy := make([]byte, len(key))
+	copy(keyCopy, key)
 	return &Store{
 		db:            db,
 		dbPath:        dbPath,
-		encryptionKey: key,
+		encryptionKey: keyCopy,
 	}, nil
 }
 

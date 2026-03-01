@@ -66,8 +66,10 @@ func seedMessages(b *testing.B, st *store.Store, n int) int64 {
 
 func BenchmarkInsert_Unencrypted(b *testing.B) {
 	st := setupBenchStore(b, nil)
-	source, _ := st.GetOrCreateSource("gmail", "bench@example.com")
-	convID, _ := st.EnsureConversation(source.ID, "conv-1", "Bench Thread")
+	source, err := st.GetOrCreateSource("gmail", "bench@example.com")
+	if err != nil { b.Fatalf("GetOrCreateSource: %v", err) }
+	convID, err := st.EnsureConversation(source.ID, "conv-1", "Bench Thread")
+	if err != nil { b.Fatalf("EnsureConversation: %v", err) }
 	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	b.ResetTimer()
@@ -89,10 +91,13 @@ func BenchmarkInsert_Unencrypted(b *testing.B) {
 }
 
 func BenchmarkInsert_Encrypted(b *testing.B) {
-	key, _ := encryption.GenerateKey()
+	key, err := encryption.GenerateKey()
+	if err != nil { b.Fatalf("GenerateKey: %v", err) }
 	st := setupBenchStore(b, key)
-	source, _ := st.GetOrCreateSource("gmail", "bench@example.com")
-	convID, _ := st.EnsureConversation(source.ID, "conv-1", "Bench Thread")
+	source, err := st.GetOrCreateSource("gmail", "bench@example.com")
+	if err != nil { b.Fatalf("GetOrCreateSource: %v", err) }
+	convID, err := st.EnsureConversation(source.ID, "conv-1", "Bench Thread")
+	if err != nil { b.Fatalf("EnsureConversation: %v", err) }
 	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	b.ResetTimer()
@@ -126,7 +131,8 @@ func BenchmarkQueryStats_Unencrypted(b *testing.B) {
 }
 
 func BenchmarkQueryStats_Encrypted(b *testing.B) {
-	key, _ := encryption.GenerateKey()
+	key, err := encryption.GenerateKey()
+	if err != nil { b.Fatalf("GenerateKey: %v", err) }
 	st := setupBenchStore(b, key)
 	seedMessages(b, st, 1000)
 
@@ -216,12 +222,16 @@ func BenchmarkFileEncrypt_1MB(b *testing.B) {
 }
 
 func BenchmarkFileDecrypt_1MB(b *testing.B) {
-	key, _ := encryption.GenerateKey()
+	key, err := encryption.GenerateKey()
+	if err != nil { b.Fatalf("GenerateKey: %v", err) }
 	data := make([]byte, 1<<20) // 1 MB
 	for i := range data {
 		data[i] = byte(i % 256)
 	}
-	encrypted, _ := encryption.EncryptBytes(key, data)
+	encrypted, err := encryption.EncryptBytes(key, data)
+	if err != nil {
+		b.Fatalf("EncryptBytes: %v", err)
+	}
 
 	b.SetBytes(int64(len(data)))
 	b.ResetTimer()

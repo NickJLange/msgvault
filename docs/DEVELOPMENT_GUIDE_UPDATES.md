@@ -35,7 +35,7 @@ Add to Lint & Format section:
 **Note on Build Flags** : 
 - FTS5 support requires CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" during build
 - This is configured in Makefile, Dockerfile, and flake.nix
-- Encryption support requires mutecomm/go-sqlcipher with SQLCipher 4.5.x
+- Encryption support requires mutecomm/go-sqlcipher with SQLCipher 4.0+
 ```
 
 ## Local CLAUDE.md

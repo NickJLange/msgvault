@@ -105,7 +105,7 @@ func TestKeyringProvider_MultipleDBs(t *testing.T) {
 func TestKeyringProvider_DeleteKey(t *testing.T) {
 	p := NewKeyringProvider("/tmp/delete-test.db")
 
-	key, _ := GenerateKey()
+	key, err := GenerateKey(); if err != nil { t.Fatalf("GenerateKey: %v", err) }
 	if err := p.SetKey(key); err != nil {
 		t.Fatalf("SetKey: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestKeyringProvider_DeleteKey(t *testing.T) {
 		t.Fatalf("DeleteKey: %v", err)
 	}
 
-	_, err := p.GetKey(context.Background())
+	_, err = p.GetKey(context.Background())
 	if err == nil {
 		t.Fatal("GetKey should fail after DeleteKey")
 	}

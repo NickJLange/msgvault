@@ -205,13 +205,11 @@ This stores the key using the configured provider (default: OS keyring).`,
 
 		fmt.Printf("   Fingerprint: %s\n", encryption.KeyFingerprint(key))
 
-		// Enable encryption in config if not already
-		if !cfg.Encryption.Enabled {
-			cfg.Encryption.Enabled = true
-			cfg.Encryption.Provider = toProvider
-			if err := cfg.Save(); err != nil {
-				return fmt.Errorf("saving config: %w", err)
-			}
+		// Update config
+		cfg.Encryption.Enabled = true
+		cfg.Encryption.Provider = toProvider
+		if err := cfg.Save(); err != nil {
+			return fmt.Errorf("saving config: %w", err)
 		}
 
 		return nil

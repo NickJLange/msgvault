@@ -19,7 +19,7 @@ created if they don't already exist.`,
 		logger.Info("initializing database", "path", dbPath)
 
 		// Open database (handles encryption if enabled)
-		s, err := openLocalStore()
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

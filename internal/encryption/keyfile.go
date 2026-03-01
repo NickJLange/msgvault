@@ -22,6 +22,9 @@ func NewKeyfileProvider(path string) *KeyfileProvider {
 func (p *KeyfileProvider) GetKey(ctx context.Context) ([]byte, error) {
 	data, err := os.ReadFile(p.path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %v", ErrKeyNotFound, err)
+		}
 		return nil, fmt.Errorf("reading key file %q: %w", p.path, err)
 	}
 	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))

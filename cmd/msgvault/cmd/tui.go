@@ -53,7 +53,7 @@ Performance:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Open database (handles encryption if enabled)
 		dbPath := cfg.DatabaseDSN()
-		s, err := openLocalStore()
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
@@ -98,7 +98,7 @@ Performance:
 			if noSQLiteScanner {
 				duckOpts.DisableSQLiteScanner = true
 			}
-			if cfg.Encryption.Enabled {
+			if s.IsEncrypted() {
 				duckOpts.Encrypted = true
 				duckOpts.EncryptionKey = s.EncryptionKey()
 			}
@@ -124,7 +124,7 @@ Performance:
 		model := tui.New(engine, tui.Options{
 			DataDir:   cfg.Data.DataDir,
 			Version:   Version,
-			Encrypted: cfg.Encryption.Enabled,
+			Encrypted: s.IsEncrypted(),
 		})
 		p := tea.NewProgram(model, tea.WithAltScreen())
 

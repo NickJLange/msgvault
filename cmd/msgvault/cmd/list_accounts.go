@@ -32,7 +32,7 @@ Examples:
 			return listRemoteAccounts()
 		}
 
-		return listLocalAccounts()
+		return listLocalAccounts(cmd)
 	},
 }
 
@@ -62,9 +62,9 @@ func listRemoteAccounts() error {
 }
 
 // listLocalAccounts fetches and displays accounts from the local database.
-func listLocalAccounts() error {
+func listLocalAccounts(cmd *cobra.Command) error {
 	// Open database (handles encryption if enabled)
-	s, err := openLocalStore()
+	s, err := openLocalStore(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
