@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -53,6 +54,30 @@ provider (default: OS keyring).`,
 					fmt.Printf("🔑 Generated new encryption key (stored in OS keyring)\n")
 				} else {
 					return fmt.Errorf("retrieving key from keyring: %w", err)
+				}
+			}
+		case "keyfile":
+			p, err := encryption.NewProvider(cfg.Encryption, dbPath)
+			if err != nil {
+				return fmt.Errorf("creating key provider: %w", err)
+			}
+			key, err = p.GetKey(cmd.Context())
+			if err != nil {
+				if errors.Is(err, encryption.ErrKeyNotFound) {
+					// No existing key — generate one
+					key, err = encryption.GenerateKey()
+					if err != nil {
+						return fmt.Errorf("generating key: %w", err)
+					}
+					// Store key in file
+					path := cfg.Encryption.Keyfile.Path
+					encoded := base64.StdEncoding.EncodeToString(key)
+					if err := os.WriteFile(path, []byte(encoded+"\n"), 0600); err != nil {
+						return fmt.Errorf("storing key in file: %w", err)
+					}
+					fmt.Printf("🔑 Generated new encryption key (stored in %s)\n", path)
+				} else {
+					return fmt.Errorf("retrieving key from file: %w", err)
 				}
 			}
 		default:

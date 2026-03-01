@@ -166,8 +166,7 @@ The TUI automatically builds/updates the Parquet cache on launch when new messag
 - **Deletion Execution**: Execute staged deletions via Gmail API (trash or permanent delete)
 - **Encryption at rest**: 
   - Layer 1: SQLCipher database encryption (mutecomm/go-sqlcipher/v4)
-  - Layer 2: AES-256-GCM file encryption for attachments & tokens
-  - Layer 3: Pluggable key providers (OS keychain, passphrase, keyfile, env, exec)
+  - Layer 2: Pluggable key providers (OS keychain, keyfile, env, exec)
   - Parquet cache encryption: DuckDB Parquet Modular Encryption
   - Key management: export, import, fingerprint, rotate commands
   - TUI indicator: 🔒 in footer when encryption active

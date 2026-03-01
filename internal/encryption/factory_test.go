@@ -90,19 +90,3 @@ func TestNewProvider_Unknown(t *testing.T) {
 		t.Fatal("NewProvider should fail for unknown provider")
 	}
 }
-
-func TestNewProvider_Passphrase(t *testing.T) {
-	cfg := config.EncryptionConfig{Provider: "passphrase"}
-	_, err := NewProvider(cfg, "/tmp/test.db")
-	if err == nil {
-		t.Fatal("NewProvider should fail for passphrase (requires interactive setup)")
-	}
-}
-
-func TestNewProvider_Vault(t *testing.T) {
-	cfg := config.EncryptionConfig{Provider: "vault"}
-	_, err := NewProvider(cfg, "/tmp/test.db")
-	if err == nil {
-		t.Fatal("NewProvider should fail for vault (not supported)")
-	}
-}

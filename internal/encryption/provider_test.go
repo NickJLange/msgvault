@@ -185,63 +185,6 @@ func TestEnvProvider_InvalidKey(t *testing.T) {
 	}
 }
 
-// --- passphrase provider tests ---
-
-func TestPassphraseProvider_DeriveKey(t *testing.T) {
-	salt := make([]byte, 16)
-	p := NewPassphraseProvider("my-secret-passphrase", salt)
-
-	k1, err := p.GetKey(context.Background())
-	if err != nil {
-		t.Fatalf("GetKey: %v", err)
-	}
-	if len(k1) != KeySize {
-		t.Fatalf("key length = %d, want %d", len(k1), KeySize)
-	}
-
-	k2, err := p.GetKey(context.Background())
-	if err != nil {
-		t.Fatalf("GetKey (second call): %v", err)
-	}
-	if !bytes.Equal(k1, k2) {
-		t.Error("same passphrase+salt produced different keys")
-	}
-	if p.Name() != "passphrase" {
-		t.Errorf("Name() = %q, want %q", p.Name(), "passphrase")
-	}
-}
-
-func TestPassphraseProvider_DifferentPassphrase(t *testing.T) {
-	salt := make([]byte, 16)
-	k1, _ := NewPassphraseProvider("passphrase-one", salt).GetKey(context.Background())
-	k2, _ := NewPassphraseProvider("passphrase-two", salt).GetKey(context.Background())
-
-	if bytes.Equal(k1, k2) {
-		t.Error("different passphrases produced the same key")
-	}
-}
-
-func TestPassphraseProvider_DifferentSalt(t *testing.T) {
-	salt1 := make([]byte, 16)
-	salt2 := make([]byte, 16)
-	salt2[0] = 1
-
-	k1, _ := NewPassphraseProvider("same-passphrase", salt1).GetKey(context.Background())
-	k2, _ := NewPassphraseProvider("same-passphrase", salt2).GetKey(context.Background())
-
-	if bytes.Equal(k1, k2) {
-		t.Error("different salts produced the same key")
-	}
-}
-
-func TestPassphraseProvider_ShortSalt(t *testing.T) {
-	p := NewPassphraseProvider("passphrase", make([]byte, 8))
-	_, err := p.GetKey(context.Background())
-	if err == nil {
-		t.Fatal("expected error for short salt")
-	}
-}
-
 // --- exec provider tests ---
 
 func TestExecProvider_GetKey(t *testing.T) {

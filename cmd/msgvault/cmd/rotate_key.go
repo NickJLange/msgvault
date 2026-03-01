@@ -57,34 +57,29 @@ The old key is no longer valid after rotation.`,
 			return fmt.Errorf("generating new key: %w", err)
 		}
 
-		// Re-key the SQLCipher database
+		// Re-key the SQLCipher database to a temporary file
+		newDBPath := dbPath + ".rotated"
 		if _, err := os.Stat(dbPath); err == nil {
-			fmt.Println("Re-keying database...")
-			if err := rekeyDatabase(dbPath, oldKey, newKey); err != nil {
+			fmt.Println("Re-keying database to temporary file...")
+			if err := rekeyDatabase(dbPath, newDBPath, oldKey, newKey); err != nil {
 				return fmt.Errorf("re-keying database: %w", err)
 			}
-			fmt.Println("  Database re-keyed successfully")
 		}
 
-		// Delete Parquet cache (will be rebuilt with new key on next TUI launch)
-		analyticsDir := cfg.AnalyticsDir()
-		if _, err := os.Stat(analyticsDir); err == nil {
-			fmt.Println("Clearing Parquet cache (will rebuild on next TUI launch)...")
-			if err := os.RemoveAll(analyticsDir); err != nil {
-				logger.Warn("failed to clear analytics cache", "err", err)
-			}
-		}
-
-		// Store new key in provider
+		// Store new key in provider BEFORE swapping the database file.
+		// This ensures we don't have a new-key database without the key.
+		fmt.Println("Storing new key in provider...")
 		switch cfg.Encryption.Provider {
 		case "keyring", "":
 			p := encryption.NewKeyringProvider(dbPath)
 			if err := p.SetKey(newKey); err != nil {
-				return fmt.Errorf("storing new key in keyring: %w\n⚠️  DATABASE HAS BEEN RE-KEYED but new key was not stored.\nNew key fingerprint: %s\nExport it manually before it is lost", err, encryption.KeyFingerprint(newKey))
+				os.Remove(newDBPath)
+				return fmt.Errorf("storing new key in keyring: %w", err)
 			}
 		case "keyfile":
 			path := cfg.Encryption.Keyfile.Path
 			if path == "" {
+				os.Remove(newDBPath)
 				return fmt.Errorf("keyfile path not configured")
 			}
 			encoded := encodeKeyBase64(newKey)
@@ -93,6 +88,7 @@ The old key is no longer valid after rotation.`,
 			dir := filepath.Dir(path)
 			tmp, err := os.CreateTemp(dir, ".keyfile-*")
 			if err != nil {
+				os.Remove(newDBPath)
 				return fmt.Errorf("creating temp keyfile: %w", err)
 			}
 			tmpPath := tmp.Name()
@@ -100,41 +96,52 @@ The old key is no longer valid after rotation.`,
 			if _, err := tmp.Write([]byte(encoded + "\n")); err != nil {
 				tmp.Close()
 				os.Remove(tmpPath)
+				os.Remove(newDBPath)
 				return fmt.Errorf("writing temp keyfile: %w", err)
 			}
 			if err := tmp.Chmod(0600); err != nil {
 				tmp.Close()
 				os.Remove(tmpPath)
+				os.Remove(newDBPath)
 				return fmt.Errorf("setting keyfile permissions: %w", err)
 			}
 			if err := tmp.Close(); err != nil {
 				os.Remove(tmpPath)
+				os.Remove(newDBPath)
 				return fmt.Errorf("closing temp keyfile: %w", err)
 			}
 			if err := os.Rename(tmpPath, path); err != nil {
 				os.Remove(tmpPath)
+				os.Remove(newDBPath)
 				return fmt.Errorf("writing new key to keyfile: %w", err)
 			}
 		default:
 			// For env/exec providers, we can't store the key — user must update it externally
 			fmt.Printf("\n⚠️  Provider %q is read-only. Update the key source with the new key.\n", cfg.Encryption.Provider)
 			fmt.Printf("   New key (base64): %s\n", encodeKeyBase64(newKey))
+			fmt.Printf("   Press Enter once you have updated the key source to finalize the database swap...")
+			fmt.Scanln()
 		}
 
-		fmt.Printf("\n✅ Key rotated successfully\n")
-		fmt.Printf("   Old fingerprint: %s\n", encryption.KeyFingerprint(oldKey))
-		fmt.Printf("   New fingerprint: %s\n", encryption.KeyFingerprint(newKey))
-		fmt.Printf("\n⚠️  Back up your new key: msgvault key export --out ~/msgvault-key-backup.txt\n")
+		// Now swap the database files
+		if _, err := os.Stat(newDBPath); err == nil {
+			fmt.Println("Finalizing database swap...")
+			os.Remove(dbPath + "-wal")
+			os.Remove(dbPath + "-shm")
+			if err := fileutil.AtomicRename(newDBPath, dbPath); err != nil {
+				return fmt.Errorf("swap rotated database: %w (your new database is at %s)", err, newDBPath)
+			}
+			os.Remove(dbPath + "-wal")
+			os.Remove(dbPath + "-shm")
+			fmt.Println("  Database re-keyed successfully")
+		}
 
-		return nil
-	},
-}
-
+		// Delete Parquet cache
+...
 // rekeyDatabase changes the encryption key on a SQLCipher database by exporting
-// to a new encrypted database and then swapping files.
-func rekeyDatabase(dbPath string, oldKey, newKey []byte) error {
-	newDBPath := dbPath + ".rotated"
-	os.Remove(newDBPath) // Clean up any failed attempt
+// to a new encrypted database at dstPath. It does NOT swap the files.
+func rekeyDatabase(dbPath, dstPath string, oldKey, newKey []byte) error {
+	os.Remove(dstPath) // Clean up any failed attempt
 
 	oldHex := hex.EncodeToString(oldKey)
 	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&_pragma_key=x'%s'", dbPath, oldHex)
@@ -151,14 +158,14 @@ func rekeyDatabase(dbPath string, oldKey, newKey []byte) error {
 	// Attach the new database with the new key
 	newHex := hex.EncodeToString(newKey)
 	attachSQL := fmt.Sprintf("ATTACH DATABASE '%s' AS new_db KEY \"x'%s'\"",
-		strings.ReplaceAll(newDBPath, "'", "''"), newHex)
+		strings.ReplaceAll(dstPath, "'", "''"), newHex)
 	if _, err := db.Exec(attachSQL); err != nil {
 		return fmt.Errorf("attach new database: %w", err)
 	}
 
 	// Export all data to the new database
 	if _, err := db.Exec("SELECT sqlcipher_export('new_db')"); err != nil {
-		os.Remove(newDBPath)
+		os.Remove(dstPath)
 		return fmt.Errorf("sqlcipher_export: %w", err)
 	}
 
@@ -169,19 +176,10 @@ func rekeyDatabase(dbPath string, oldKey, newKey []byte) error {
 
 	// Detach
 	if _, err := db.Exec("DETACH DATABASE new_db"); err != nil {
-		os.Remove(newDBPath)
+		os.Remove(dstPath)
 		return fmt.Errorf("detach new database: %w", err)
 	}
 	db.Close()
-
-	// Swap files
-	os.Remove(dbPath + "-wal")
-	os.Remove(dbPath + "-shm")
-	if err := fileutil.AtomicRename(newDBPath, dbPath); err != nil {
-		return fmt.Errorf("swap rotated database: %w", err)
-	}
-	os.Remove(newDBPath + "-wal")
-	os.Remove(newDBPath + "-shm")
 
 	return nil
 }
