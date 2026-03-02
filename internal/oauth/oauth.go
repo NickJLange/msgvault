@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/wesm/msgvault/internal/encryption"
 	"github.com/wesm/msgvault/internal/fileutil"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -36,9 +37,10 @@ var ScopesDeletion = []string{
 
 // Manager handles OAuth2 token acquisition and storage.
 type Manager struct {
-	config    *oauth2.Config
-	tokensDir string
-	logger    *slog.Logger
+	config        *oauth2.Config
+	tokensDir     string
+	logger        *slog.Logger
+	encryptionKey []byte
 }
 
 // NewManager creates an OAuth manager from client secrets.
@@ -230,6 +232,14 @@ func (m *Manager) loadToken(email string) (*oauth2.Token, error) {
 		return nil, err
 	}
 
+	if len(m.encryptionKey) > 0 && encryption.IsEncrypted(data) {
+		decrypted, err := encryption.DecryptBytes(m.encryptionKey, data)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt token: %w", err)
+		}
+		data = decrypted
+	}
+
 	var tf tokenFile
 	if err := json.Unmarshal(data, &tf); err != nil {
 		return nil, err
@@ -244,6 +254,14 @@ func (m *Manager) loadTokenFile(email string) (*tokenFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(m.encryptionKey) > 0 && encryption.IsEncrypted(data) {
+		decrypted, err := encryption.DecryptBytes(m.encryptionKey, data)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt token: %w", err)
+		}
+		data = decrypted
 	}
 
 	var tf tokenFile
@@ -294,6 +312,14 @@ func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string) 
 	data, err := json.MarshalIndent(tf, "", "  ")
 	if err != nil {
 		return err
+	}
+
+	if len(m.encryptionKey) > 0 {
+		encrypted, err := encryption.EncryptBytes(m.encryptionKey, data)
+		if err != nil {
+			return fmt.Errorf("encrypt token: %w", err)
+		}
+		data = encrypted
 	}
 
 	path := m.tokenPath(email)
@@ -456,6 +482,12 @@ func NewManagerWithScopes(clientSecretsPath, tokensDir string, logger *slog.Logg
 		tokensDir: tokensDir,
 		logger:    logger,
 	}, nil
+}
+
+// WithEncryptionKey sets the encryption key for token storage.
+func (m *Manager) WithEncryptionKey(key []byte) *Manager {
+	m.encryptionKey = key
+	return m
 }
 
 // parseClientSecrets parses Google OAuth client secrets JSON.
