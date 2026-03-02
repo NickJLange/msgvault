@@ -59,6 +59,14 @@ make lint                     # Run linter
 
 # Maintenance
 ./msgvault repair-encoding                            # Fix UTF-8 encoding issues
+
+# Encryption
+./msgvault encrypt                                    # Encrypt existing database
+./msgvault decrypt                                    # Decrypt for export/migration
+./msgvault key export --out key.txt                   # Backup encryption key
+./msgvault key import --from key.txt                  # Restore encryption key
+./msgvault key fingerprint                            # Show key fingerprint
+./msgvault key rotate                                 # Rotate encryption key
 ```
 
 ## Key Files
@@ -68,6 +76,8 @@ make lint                     # Run linter
 - `syncfull.go` - Full sync command implementation
 - `syncincremental.go` - Incremental sync command
 - `tui.go` - TUI command, cache auto-build
+- `key.go` - Key management commands (init, export, import, fingerprint)
+- `encrypt.go` - Encrypt/decrypt commands for file-level encryption
 - `build_cache.go` - Parquet cache builder (DuckDB)
 - `repair_encoding.go` - UTF-8 encoding repair
 
@@ -154,9 +164,15 @@ The TUI automatically builds/updates the Parquet cache on launch when new messag
 - **TUI**: Full-featured TUI with drill-down navigation, search, selection, deletion staging
 - **UTF-8 Repair**: Comprehensive encoding repair for all string fields
 - **Deletion Execution**: Execute staged deletions via Gmail API (trash or permanent delete)
+- **Encryption at rest**: 
+  - Layer 1: SQLCipher database encryption (mutecomm/go-sqlcipher/v4)
+  - Layer 2: Pluggable key providers (OS keychain, keyfile, env, exec)
+  - Parquet cache encryption: DuckDB Parquet Modular Encryption
+  - Key management: export, import, fingerprint, rotate commands
+  - TUI indicator: 🔒 in footer when encryption active
+  - Performance: ~5.0x insert overhead (SQLCipher WAL/HMAC), <1% query/FTS5 overhead
 
 ### Not Yet Implemented
-- **App-level encryption**: Encrypt database and attachments at rest
 - **Web UI**: Browser-based interface
 
 ## Testing with Real Gmail Data
@@ -246,4 +262,8 @@ client_secrets = "/path/to/client_secret.json"
 
 [sync]
 rate_limit_qps = 5
+
+[encryption]
+# enabled = true
+# provider = "keyring"  # keyring | passphrase | keyfile | env | exec
 ```

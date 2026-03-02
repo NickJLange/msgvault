@@ -24,7 +24,7 @@ ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
 # Note: Module path must match go.mod (github.com/wesm/msgvault)
-RUN CGO_ENABLED=1 go build \
+RUN CGO_ENABLED=1 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" go build \
     -tags fts5 \
     -trimpath \
     -ldflags="-s -w \

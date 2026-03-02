@@ -1134,6 +1134,134 @@ func TestSave_OverwritesExisting(t *testing.T) {
 	}
 }
 
+func TestEncryptionConfigDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MSGVAULT_HOME", tmpDir)
+
+	cfg, err := Load("", "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Encryption.Enabled {
+		t.Errorf("Encryption.Enabled = %v, want false", cfg.Encryption.Enabled)
+	}
+	if cfg.Encryption.Provider != "" {
+		t.Errorf("Encryption.Provider = %q, want empty", cfg.Encryption.Provider)
+	}
+}
+
+func TestLoadWithEncryptionConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MSGVAULT_HOME", tmpDir)
+
+	configContent := `
+[encryption]
+enabled = true
+provider = "keyfile"
+
+[encryption.keyfile]
+path = "/run/secrets/msgvault-key"
+`
+	configPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(configPath, "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.Encryption.Enabled {
+		t.Errorf("Encryption.Enabled = %v, want true", cfg.Encryption.Enabled)
+	}
+	if cfg.Encryption.Provider != "keyfile" {
+		t.Errorf("Encryption.Provider = %q, want keyfile", cfg.Encryption.Provider)
+	}
+	if cfg.Encryption.Keyfile.Path != "/run/secrets/msgvault-key" {
+		t.Errorf("Encryption.Keyfile.Path = %q, want /run/secrets/msgvault-key", cfg.Encryption.Keyfile.Path)
+	}
+}
+
+func TestLoadWithVaultEncryptionConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MSGVAULT_HOME", tmpDir)
+
+	configContent := `
+[encryption]
+enabled = true
+provider = "vault"
+
+[encryption.vault]
+address = "https://vault.example.com:8200"
+path = "secret/data/msgvault/key"
+field = "dek"
+auth_method = "token"
+token_path = "/run/secrets/vault-token"
+`
+	configPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(configPath, "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.Encryption.Enabled {
+		t.Errorf("Encryption.Enabled = %v, want true", cfg.Encryption.Enabled)
+	}
+	if cfg.Encryption.Provider != "vault" {
+		t.Errorf("Encryption.Provider = %q, want vault", cfg.Encryption.Provider)
+	}
+	if cfg.Encryption.Vault.Address != "https://vault.example.com:8200" {
+		t.Errorf("Encryption.Vault.Address = %q, want https://vault.example.com:8200", cfg.Encryption.Vault.Address)
+	}
+	if cfg.Encryption.Vault.Path != "secret/data/msgvault/key" {
+		t.Errorf("Encryption.Vault.Path = %q, want secret/data/msgvault/key", cfg.Encryption.Vault.Path)
+	}
+	if cfg.Encryption.Vault.Field != "dek" {
+		t.Errorf("Encryption.Vault.Field = %q, want dek", cfg.Encryption.Vault.Field)
+	}
+	if cfg.Encryption.Vault.AuthMethod != "token" {
+		t.Errorf("Encryption.Vault.AuthMethod = %q, want token", cfg.Encryption.Vault.AuthMethod)
+	}
+	if cfg.Encryption.Vault.TokenPath != "/run/secrets/vault-token" {
+		t.Errorf("Encryption.Vault.TokenPath = %q, want /run/secrets/vault-token", cfg.Encryption.Vault.TokenPath)
+	}
+}
+
+func TestSave_EncryptionRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := NewDefaultConfig()
+	cfg.HomeDir = tmpDir
+	cfg.Encryption.Enabled = true
+	cfg.Encryption.Provider = "keyfile"
+	cfg.Encryption.Keyfile.Path = "/tmp/test-key"
+
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load(cfg.ConfigFilePath(), "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !loaded.Encryption.Enabled {
+		t.Errorf("Encryption.Enabled = %v, want true", loaded.Encryption.Enabled)
+	}
+	if loaded.Encryption.Provider != "keyfile" {
+		t.Errorf("Encryption.Provider = %q, want keyfile", loaded.Encryption.Provider)
+	}
+	if loaded.Encryption.Keyfile.Path != "/tmp/test-key" {
+		t.Errorf("Encryption.Keyfile.Path = %q, want /tmp/test-key", loaded.Encryption.Keyfile.Path)
+	}
+}
+
 func TestSave_AllowInsecureRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 

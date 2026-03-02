@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,7 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/query"
-	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/tui"
 )
 
@@ -51,9 +51,9 @@ Performance:
   aggregation queries. Run 'msgvault-sync build-parquet' to generate them.
   Use --force-sql to bypass Parquet and query SQLite directly (slow).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Open database
+		// Open database (handles encryption if enabled)
 		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
@@ -76,7 +76,7 @@ Performance:
 
 		// Check if cache needs to be built/updated (unless forcing SQL or skipping)
 		if !forceSQL && !skipCacheBuild {
-			needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir)
+			needsBuild, reason := cacheNeedsBuild(s.DB(), analyticsDir)
 			if needsBuild {
 				fmt.Printf("Building analytics cache (%s)...\n", reason)
 				result, err := buildCache(dbPath, analyticsDir, true)
@@ -98,6 +98,10 @@ Performance:
 			if noSQLiteScanner {
 				duckOpts.DisableSQLiteScanner = true
 			}
+			if s.IsEncrypted() {
+				duckOpts.Encrypted = true
+				duckOpts.EncryptionKey = s.EncryptionKey()
+			}
 			duckEngine, err := query.NewDuckDBEngine(analyticsDir, dbPath, s.DB(), duckOpts)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: Failed to open Parquet engine: %v\n", err)
@@ -117,7 +121,11 @@ Performance:
 		}
 
 		// Create and run TUI
-		model := tui.New(engine, tui.Options{DataDir: cfg.Data.DataDir, Version: Version})
+		model := tui.New(engine, tui.Options{
+			DataDir:   cfg.Data.DataDir,
+			Version:   Version,
+			Encrypted: s.IsEncrypted(),
+		})
 		p := tea.NewProgram(model, tea.WithAltScreen())
 
 		if _, err := p.Run(); err != nil {
@@ -130,7 +138,7 @@ Performance:
 
 // cacheNeedsBuild checks if the analytics cache needs to be built or updated.
 // Returns (needsBuild, reason) where reason describes why.
-func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
+func cacheNeedsBuild(sqliteDB *sql.DB, analyticsDir string) (bool, string) {
 	messagesDir := filepath.Join(analyticsDir, "messages")
 	stateFile := filepath.Join(analyticsDir, "_last_sync.json")
 
@@ -151,16 +159,8 @@ func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
 	}
 
 	// Check if SQLite has newer messages
-	// We need to query SQLite directly to check max message ID
-	db, err := store.Open(dbPath)
-	if err != nil {
-		// Can't open DB to check - force rebuild to be safe
-		return true, "cannot verify cache status"
-	}
-	defer db.Close()
-
 	var maxID int64
-	err = db.DB().QueryRow(`
+	err = sqliteDB.QueryRow(`
 		SELECT COALESCE(MAX(id), 0) FROM messages
 		WHERE deleted_from_source_at IS NULL AND sent_at IS NOT NULL
 	`).Scan(&maxID)

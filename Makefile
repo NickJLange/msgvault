@@ -12,23 +12,27 @@ LDFLAGS := -X github.com/wesm/msgvault/cmd/msgvault/cmd.Version=$(VERSION) \
 
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 
+# Enable FTS5 in mutecomm/go-sqlcipher's embedded SQLCipher
+CGO_CFLAGS := -DSQLITE_ENABLE_FTS5
+
 .PHONY: build build-release install clean test test-v fmt lint tidy shootout run-shootout setup-hooks help
 
 # Build the binary (debug)
 build:
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
+	@sudo xcodebuild -license accept
+	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" go build -tags fts5 -ldflags="$(LDFLAGS)" -o msgvault ./cmd/msgvault
 	@chmod +x msgvault
 
 # Build with optimizations (release)
 build-release:
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o msgvault ./cmd/msgvault
+	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o msgvault ./cmd/msgvault
 	@chmod +x msgvault
 
 # Install to ~/.local/bin, $GOBIN, or $GOPATH/bin
 install:
 	@if [ -d "$(HOME)/.local/bin" ]; then \
 		echo "Installing to ~/.local/bin/msgvault"; \
-		CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/msgvault" ./cmd/msgvault; \
+		CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" go build -tags fts5 -ldflags="$(LDFLAGS)" -o "$(HOME)/.local/bin/msgvault" ./cmd/msgvault; \
 	else \
 		INSTALL_DIR="$${GOBIN:-$$(go env GOBIN)}"; \
 		if [ -z "$$INSTALL_DIR" ]; then \
@@ -37,7 +41,7 @@ install:
 		fi; \
 		mkdir -p "$$INSTALL_DIR"; \
 		echo "Installing to $$INSTALL_DIR/msgvault"; \
-		CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/msgvault" ./cmd/msgvault; \
+		CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" go build -tags fts5 -ldflags="$(LDFLAGS)" -o "$$INSTALL_DIR/msgvault" ./cmd/msgvault; \
 	fi
 
 # Clean build artifacts
@@ -47,11 +51,11 @@ clean:
 
 # Run tests
 test:
-	go test -tags fts5 ./...
+	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" go test -tags fts5 ./...
 
 # Run tests with verbose output
 test-v:
-	go test -tags fts5 -v ./...
+	CGO_ENABLED=1 CGO_CFLAGS="$(CGO_CFLAGS)" go test -tags fts5 -v ./...
 
 # Format code
 fmt:

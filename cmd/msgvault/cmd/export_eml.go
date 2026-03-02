@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/fileutil"
 	"github.com/wesm/msgvault/internal/query"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var (
@@ -31,9 +30,8 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		idStr := args[0]
 
-		// Open database
-		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		// Open database (handles encryption if enabled)
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

@@ -50,6 +50,9 @@ type Options struct {
 	// ThreadMessageLimit overrides the maximum number of messages in a thread view.
 	// Zero uses the default (1,000).
 	ThreadMessageLimit int
+
+	// Encrypted indicates database encryption is active (shows 🔒 in footer).
+	Encrypted bool
 }
 
 // modalType represents the type of modal dialog.
@@ -190,6 +193,9 @@ type Model struct {
 	exportSelection map[int]bool // Selected attachment indices for export
 	exportCursor    int          // Cursor position in export modal
 
+	// Encryption state
+	encrypted bool
+
 	// Quit flag
 	quitting bool
 }
@@ -214,6 +220,7 @@ func New(engine query.Engine, opts Options) Model {
 		engine:             engine,
 		actions:            NewActionController(engine, opts.DataDir, nil),
 		version:            opts.Version,
+		encrypted:          opts.Encrypted,
 		aggregateLimit:     aggLimit,
 		threadMessageLimit: threadLimit,
 		viewState: viewState{
