@@ -131,8 +131,9 @@ The old key is no longer valid after rotation.`,
 			if err := fileutil.AtomicRename(newDBPath, dbPath); err != nil {
 				return fmt.Errorf("swap rotated database: %w (your new database is at %s)", err, newDBPath)
 			}
-			os.Remove(dbPath + "-wal")
-			os.Remove(dbPath + "-shm")
+			// Clean up any WAL/SHM from the temporary database
+			os.Remove(newDBPath + "-wal")
+			os.Remove(newDBPath + "-shm")
 			fmt.Println("  Database re-keyed successfully")
 		}
 
@@ -142,6 +143,8 @@ The old key is no longer valid after rotation.`,
 // to a new encrypted database at dstPath. It does NOT swap the files.
 func rekeyDatabase(dbPath, dstPath string, oldKey, newKey []byte) error {
 	os.Remove(dstPath) // Clean up any failed attempt
+	os.Remove(dstPath + "-wal")
+	os.Remove(dstPath + "-shm")
 
 	oldHex := hex.EncodeToString(oldKey)
 	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&_pragma_key=x'%s'", dbPath, oldHex)

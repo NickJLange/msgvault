@@ -2,6 +2,7 @@ package encryption
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -45,6 +46,9 @@ func TestKeyringProvider_NotFound(t *testing.T) {
 	_, err := p.GetKey(context.Background())
 	if err == nil {
 		t.Fatal("GetKey should fail when no key is stored")
+	}
+	if !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("got error %v, want %v", err, ErrKeyNotFound)
 	}
 }
 
@@ -117,6 +121,9 @@ func TestKeyringProvider_DeleteKey(t *testing.T) {
 	_, err = p.GetKey(context.Background())
 	if err == nil {
 		t.Fatal("GetKey should fail after DeleteKey")
+	}
+	if !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("got error %v, want %v", err, ErrKeyNotFound)
 	}
 }
 

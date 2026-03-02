@@ -168,11 +168,14 @@ func SecureOpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
 func AtomicRename(oldPath, newPath string) error {
 	oldPtr, err := windows.UTF16PtrFromString(oldPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to convert oldPath to UTF16 pointer: %w", err)
 	}
 	newPtr, err := windows.UTF16PtrFromString(newPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to convert newPath to UTF16 pointer: %w", err)
 	}
-	return windows.MoveFileEx(oldPtr, newPtr, windows.MOVEFILE_REPLACE_EXISTING)
+	if err := windows.MoveFileEx(oldPtr, newPtr, windows.MOVEFILE_REPLACE_EXISTING); err != nil {
+		return fmt.Errorf("MoveFileEx failed replacing %s with %s: %w", oldPath, newPath, err)
+	}
+	return nil
 }

@@ -40,6 +40,9 @@ func GenerateKey() ([]byte, error) {
 
 // KeyFingerprint returns a short fingerprint of the key for display purposes.
 func KeyFingerprint(key []byte) string {
+	if len(key) == 0 {
+		return "no key"
+	}
 	h := sha256.Sum256(key)
 	return fmt.Sprintf("SHA-256: %x", h[:8])
 }

@@ -766,6 +766,11 @@ func exportToCSV(db *sql.DB, query string, dest string) error {
 // don't prompt the user multiple times.
 var cachedEncryptionKey []byte
 
+// ResetCachedEncryptionKey clears the cached encryption key.
+func ResetCachedEncryptionKey() {
+	cachedEncryptionKey = nil
+}
+
 func getEncryptionKey() ([]byte, error) {
 	if cachedEncryptionKey != nil {
 		return cachedEncryptionKey, nil
@@ -781,8 +786,9 @@ func getEncryptionKey() ([]byte, error) {
 	if err := encryption.ValidateKey(key); err != nil {
 		return nil, fmt.Errorf("invalid encryption key: %w", err)
 	}
-	cachedEncryptionKey = key
-	return key, nil
+	// Store defensive copy
+	cachedEncryptionKey = append([]byte(nil), key...)
+	return cachedEncryptionKey, nil
 }
 
 func init() {
