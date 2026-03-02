@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var updateDisplayName string
@@ -27,8 +26,8 @@ Examples:
 			return fmt.Errorf("nothing to update: use --display-name to set a display name")
 		}
 
-		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		// Open database (handles encryption if enabled)
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}

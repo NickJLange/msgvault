@@ -161,3 +161,21 @@ func SecureOpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
 	}
 	return f, nil
 }
+
+// AtomicRename renames (moves) oldPath to newPath.
+// On Windows, this uses MoveFileEx with MOVEFILE_REPLACE_EXISTING to ensure
+// it behaves like Unix rename.
+func AtomicRename(oldPath, newPath string) error {
+	oldPtr, err := windows.UTF16PtrFromString(oldPath)
+	if err != nil {
+		return fmt.Errorf("failed to convert oldPath to UTF16 pointer: %w", err)
+	}
+	newPtr, err := windows.UTF16PtrFromString(newPath)
+	if err != nil {
+		return fmt.Errorf("failed to convert newPath to UTF16 pointer: %w", err)
+	}
+	if err := windows.MoveFileEx(oldPtr, newPtr, windows.MOVEFILE_REPLACE_EXISTING); err != nil {
+		return fmt.Errorf("MoveFileEx failed replacing %s with %s: %w", oldPath, newPath, err)
+	}
+	return nil
+}

@@ -14,7 +14,7 @@ var statsCmd = &cobra.Command{
 Uses remote server if [remote].url is configured, otherwise uses local database.
 Use --local to force local database.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		s, err := OpenStore()
+		s, err := OpenStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}

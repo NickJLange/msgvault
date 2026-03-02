@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/jhillyerd/enmime"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 type PythonMessage struct {

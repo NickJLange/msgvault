@@ -10,7 +10,7 @@ import (
 	"os"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mutecomm/go-sqlcipher/v4"
 )
 
 // StrPtr returns a pointer to a string (useful for optional fields in test opts).

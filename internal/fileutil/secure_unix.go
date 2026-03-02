@@ -31,3 +31,9 @@ func SecureChmod(path string, perm os.FileMode) error {
 func SecureOpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
 	return os.OpenFile(path, flag, perm)
 }
+
+// AtomicRename renames (moves) oldPath to newPath.
+// On Unix, this is a thin wrapper around os.Rename.
+func AtomicRename(oldPath, newPath string) error {
+	return os.Rename(oldPath, newPath)
+}

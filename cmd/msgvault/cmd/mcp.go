@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 	mcpserver "github.com/wesm/msgvault/internal/mcp"
 	"github.com/wesm/msgvault/internal/query"
-	"github.com/wesm/msgvault/internal/store"
 )
 
 var mcpForceSQL bool
@@ -33,12 +32,15 @@ Add to Claude Desktop config:
     }
   }`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dbPath := cfg.DatabaseDSN()
-		s, err := store.Open(dbPath)
+		// Open database (handles encryption if enabled)
+		s, err := openLocalStore(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
 		defer s.Close()
+
+		// Get database path for DuckDB engine
+		dbPath := cfg.DatabaseDSN()
 
 		// Ensure schema is up to date
 		if err := s.InitSchema(); err != nil {
@@ -59,6 +61,10 @@ Add to Claude Desktop config:
 			var duckOpts query.DuckDBOptions
 			if mcpNoSQLiteScanner {
 				duckOpts.DisableSQLiteScanner = true
+			}
+			if cfg.Encryption.Enabled {
+				duckOpts.Encrypted = true
+				duckOpts.EncryptionKey = s.EncryptionKey()
 			}
 			duckEngine, err := query.NewDuckDBEngine(analyticsDir, dbPath, s.DB(), duckOpts)
 			if err != nil {
