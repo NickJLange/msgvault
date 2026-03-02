@@ -4,6 +4,7 @@ package export
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/wesm/msgvault/internal/fileutil"
 
+	"github.com/wesm/msgvault/internal/encryption"
 	"github.com/wesm/msgvault/internal/query"
 )
 
@@ -50,7 +52,8 @@ type ExportStats struct {
 
 // Attachments exports the given attachments into a zip file.
 // It reads attachment content from attachmentsDir using content-hash based paths.
-func Attachments(zipFilename, attachmentsDir string, attachments []query.AttachmentInfo) ExportStats {
+// If key is non-nil, it attempts to decrypt encrypted files.
+func Attachments(zipFilename, attachmentsDir string, attachments []query.AttachmentInfo, key []byte) ExportStats {
 	zipFile, err := os.Create(zipFilename)
 	if err != nil {
 		return ExportStats{Errors: []string{fmt.Sprintf("failed to create zip file: %v", err)}}
@@ -68,7 +71,7 @@ func Attachments(zipFilename, attachmentsDir string, attachments []query.Attachm
 			continue
 		}
 
-		n, err := addAttachmentToZip(zipWriter, attachmentsDir, att, usedNames)
+		n, err := addAttachmentToZip(zipWriter, attachmentsDir, att, usedNames, key)
 		if err != nil {
 			stats.Errors = append(stats.Errors, fmt.Sprintf("%s: %v", att.Filename, err))
 			if isWriteError(err) {
@@ -140,7 +143,7 @@ func isWriteError(err error) bool {
 	return ok
 }
 
-func addAttachmentToZip(zw *zip.Writer, root string, att query.AttachmentInfo, usedNames map[string]int) (int64, error) {
+func addAttachmentToZip(zw *zip.Writer, root string, att query.AttachmentInfo, usedNames map[string]int, key []byte) (int64, error) {
 	storagePath, err := StoragePath(root, att.ContentHash)
 	if err != nil {
 		return 0, err
@@ -151,6 +154,23 @@ func addAttachmentToZip(zw *zip.Writer, root string, att query.AttachmentInfo, u
 	}
 	defer srcFile.Close()
 
+	var r io.Reader = srcFile
+	if len(key) > 0 {
+		data, err := io.ReadAll(srcFile)
+		if err != nil {
+			return 0, err
+		}
+		if encryption.IsEncrypted(data) {
+			decrypted, err := encryption.DecryptBytes(key, data)
+			if err != nil {
+				return 0, fmt.Errorf("decrypt: %w", err)
+			}
+			r = bytes.NewReader(decrypted)
+		} else {
+			r = bytes.NewReader(data)
+		}
+	}
+
 	filename := resolveUniqueFilename(att.Filename, att.ContentHash, usedNames)
 
 	w, err := zw.Create(filename)
@@ -158,7 +178,7 @@ func addAttachmentToZip(zw *zip.Writer, root string, att query.AttachmentInfo, u
 		return 0, &zipWriteError{fmt.Errorf("zip write error: %w", err)}
 	}
 
-	n, err := io.Copy(w, srcFile)
+	n, err := io.Copy(w, r)
 	if err != nil {
 		return 0, &zipWriteError{fmt.Errorf("zip write error: %w", err)}
 	}
@@ -260,7 +280,8 @@ func (r DirExportResult) TotalSize() int64 {
 // It reads attachment content from attachmentsDir using content-hash based paths
 // and writes each file with its original filename (sanitized, deduplicated).
 // Files are created with O_EXCL to avoid overwriting existing files.
-func AttachmentsToDir(outputDir, attachmentsDir string, attachments []query.AttachmentInfo) DirExportResult {
+// If key is non-nil, it attempts to decrypt encrypted files.
+func AttachmentsToDir(outputDir, attachmentsDir string, attachments []query.AttachmentInfo, key []byte) DirExportResult {
 	var result DirExportResult
 	usedNames := make(map[string]int)
 
@@ -271,7 +292,7 @@ func AttachmentsToDir(outputDir, attachmentsDir string, attachments []query.Atta
 		}
 
 		filename := resolveUniqueFilename(att.Filename, att.ContentHash, usedNames)
-		exported, err := exportAttachmentToFile(outputDir, attachmentsDir, att.ContentHash, filename)
+		exported, err := exportAttachmentToFile(outputDir, attachmentsDir, att.ContentHash, filename, key)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", att.Filename, err))
 			continue
@@ -286,7 +307,7 @@ func AttachmentsToDir(outputDir, attachmentsDir string, attachments []query.Atta
 // exportAttachmentToFile streams a single attachment from content-addressed
 // storage to outputDir/filename. Uses O_EXCL to avoid overwriting; appends
 // _1, _2, etc. on conflict.
-func exportAttachmentToFile(outputDir, attachmentsDir, contentHash, filename string) (ExportedFile, error) {
+func exportAttachmentToFile(outputDir, attachmentsDir, contentHash, filename string, key []byte) (ExportedFile, error) {
 	srcPath, err := StoragePath(attachmentsDir, contentHash)
 	if err != nil {
 		return ExportedFile{}, err
@@ -300,13 +321,30 @@ func exportAttachmentToFile(outputDir, attachmentsDir, contentHash, filename str
 	}
 	defer src.Close()
 
+	var r io.Reader = src
+	if len(key) > 0 {
+		data, err := io.ReadAll(src)
+		if err != nil {
+			return ExportedFile{}, err
+		}
+		if encryption.IsEncrypted(data) {
+			decrypted, err := encryption.DecryptBytes(key, data)
+			if err != nil {
+				return ExportedFile{}, fmt.Errorf("decrypt: %w", err)
+			}
+			r = bytes.NewReader(decrypted)
+		} else {
+			r = bytes.NewReader(data)
+		}
+	}
+
 	destPath := filepath.Join(outputDir, filename)
 	dst, finalPath, err := CreateExclusiveFile(destPath, 0600)
 	if err != nil {
 		return ExportedFile{}, fmt.Errorf("create output file: %w", err)
 	}
 
-	n, copyErr := io.Copy(dst, src)
+	n, copyErr := io.Copy(dst, r)
 	closeErr := dst.Close()
 	if copyErr != nil {
 		os.Remove(finalPath)

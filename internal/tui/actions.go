@@ -33,9 +33,10 @@ type DeletionContext struct {
 // ActionController handles business logic for actions like deletion and export,
 // keeping domain operations out of the TUI Model.
 type ActionController struct {
-	queries   query.Engine
-	deletions *deletion.Manager
-	dataDir   string
+	queries       query.Engine
+	deletions     *deletion.Manager
+	dataDir       string
+	encryptionKey []byte
 }
 
 // NewActionController creates a new action controller.
@@ -46,6 +47,12 @@ func NewActionController(queries query.Engine, dataDir string, deletions *deleti
 		deletions: deletions,
 		dataDir:   dataDir,
 	}
+}
+
+// WithEncryptionKey sets the encryption key for actions that need it (e.g. decrypting attachments).
+func (c *ActionController) WithEncryptionKey(key []byte) *ActionController {
+	c.encryptionKey = key
+	return c
 }
 
 // SaveManifest initializes the deletion manager if needed and saves the manifest.
@@ -230,7 +237,7 @@ func (c *ActionController) ExportAttachments(detail *query.MessageDetail, select
 	zipFilename := fmt.Sprintf("%s_%d.zip", subject, detail.ID)
 
 	return func() tea.Msg {
-		stats := export.Attachments(zipFilename, attachmentsDir, selectedAttachments)
+		stats := export.Attachments(zipFilename, attachmentsDir, selectedAttachments, c.encryptionKey)
 		msg := ExportResultMsg{Result: export.FormatExportResult(stats)}
 		// Only set Err for true failures: write errors or zero exported files.
 		// Partial success (some files exported, some errors) should show the

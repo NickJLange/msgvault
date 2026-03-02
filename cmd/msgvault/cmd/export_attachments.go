@@ -88,7 +88,7 @@ func runExportAttachments(cmd *cobra.Command, args []string) error {
 
 	// Export
 	attachmentsDir := cfg.AttachmentsDir()
-	result := export.AttachmentsToDir(outputDir, attachmentsDir, msg.Attachments)
+	result := export.AttachmentsToDir(outputDir, attachmentsDir, msg.Attachments, s.EncryptionKey())
 
 	// Print per-file results
 	for _, f := range result.Files {

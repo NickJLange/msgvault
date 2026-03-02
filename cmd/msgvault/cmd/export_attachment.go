@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/wesm/msgvault/internal/encryption"
 	"github.com/wesm/msgvault/internal/export"
 	"github.com/wesm/msgvault/internal/fileutil"
 )
@@ -76,21 +78,40 @@ func runExportAttachment(cmd *cobra.Command, args []string) error {
 	attachmentsDir := cfg.AttachmentsDir()
 	storagePath := filepath.Join(attachmentsDir, contentHash[:2], contentHash)
 
+	// Get encryption key if enabled
+	var key []byte
+	if cfg.Encryption.Enabled {
+		s, err := openLocalStore(cmd.Context())
+		if err != nil {
+			return fmt.Errorf("open database: %w", err)
+		}
+		defer s.Close()
+		key = s.EncryptionKey()
+	}
+
 	// JSON mode reads the full file into memory for base64 encoding.
 	// Base64 and binary modes stream directly to avoid loading large files.
 	if exportAttachmentJSON {
-		return exportAttachmentAsJSON(storagePath, contentHash)
+		return exportAttachmentAsJSON(storagePath, contentHash, key)
 	}
 	if exportAttachmentBase64 {
-		return exportAttachmentAsBase64(storagePath)
+		return exportAttachmentAsBase64(storagePath, key)
 	}
-	return exportAttachmentBinary(storagePath, contentHash)
+	return exportAttachmentBinary(storagePath, contentHash, key)
 }
 
-func exportAttachmentAsJSON(storagePath, contentHash string) error {
+func exportAttachmentAsJSON(storagePath, contentHash string, key []byte) error {
 	data, err := readAttachmentFile(storagePath, contentHash)
 	if err != nil {
 		return err
+	}
+
+	if len(key) > 0 && encryption.IsEncrypted(data) {
+		decrypted, err := encryption.DecryptBytes(key, data)
+		if err != nil {
+			return fmt.Errorf("decrypt: %w", err)
+		}
+		data = decrypted
 	}
 
 	output := map[string]any{
@@ -103,15 +124,34 @@ func exportAttachmentAsJSON(storagePath, contentHash string) error {
 	return enc.Encode(output)
 }
 
-func exportAttachmentAsBase64(storagePath string) error {
+func exportAttachmentAsBase64(storagePath string, key []byte) error {
+	var r io.ReadCloser
 	f, err := openAttachmentFile(storagePath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	r = f
+
+	if len(key) > 0 {
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			return err
+		}
+		if encryption.IsEncrypted(data) {
+			decrypted, err := encryption.DecryptBytes(key, data)
+			if err != nil {
+				return fmt.Errorf("decrypt: %w", err)
+			}
+			r = io.NopCloser(bytes.NewReader(decrypted))
+		} else {
+			r = io.NopCloser(bytes.NewReader(data))
+		}
+	}
+	defer r.Close()
 
 	encoder := base64.NewEncoder(base64.StdEncoding, os.Stdout)
-	if _, err := io.Copy(encoder, f); err != nil {
+	if _, err := io.Copy(encoder, r); err != nil {
 		return fmt.Errorf("encode attachment: %w", err)
 	}
 	if err := encoder.Close(); err != nil {
@@ -121,16 +161,35 @@ func exportAttachmentAsBase64(storagePath string) error {
 	return nil
 }
 
-func exportAttachmentBinary(storagePath, contentHash string) error {
+func exportAttachmentBinary(storagePath, contentHash string, key []byte) error {
+	var r io.ReadCloser
 	f, err := openAttachmentFile(storagePath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	r = f
+
+	if len(key) > 0 {
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			return err
+		}
+		if encryption.IsEncrypted(data) {
+			decrypted, err := encryption.DecryptBytes(key, data)
+			if err != nil {
+				return fmt.Errorf("decrypt: %w", err)
+			}
+			r = io.NopCloser(bytes.NewReader(decrypted))
+		} else {
+			r = io.NopCloser(bytes.NewReader(data))
+		}
+	}
+	defer r.Close()
 
 	outputPath := exportAttachmentOutput
 	if outputPath == "" || outputPath == "-" {
-		_, err = io.Copy(os.Stdout, f)
+		_, err = io.Copy(os.Stdout, r)
 		return err
 	}
 
@@ -139,7 +198,7 @@ func exportAttachmentBinary(storagePath, contentHash string) error {
 		return fmt.Errorf("create output file: %w", err)
 	}
 
-	n, copyErr := io.Copy(dst, f)
+	n, copyErr := io.Copy(dst, r)
 	closeErr := dst.Close()
 	if copyErr != nil {
 		os.Remove(outputPath)
