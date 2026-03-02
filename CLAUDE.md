@@ -170,7 +170,7 @@ The TUI automatically builds/updates the Parquet cache on launch when new messag
   - Parquet cache encryption: DuckDB Parquet Modular Encryption
   - Key management: export, import, fingerprint, rotate commands
   - TUI indicator: 🔒 in footer when encryption active
-  - Performance: ~4.6x insert overhead (SQLCipher WAL sync), ~1% query overhead
+  - Performance: ~5.0x insert overhead (SQLCipher WAL/HMAC), <1% query/FTS5 overhead
 
 ### Not Yet Implemented
 - **Web UI**: Browser-based interface

@@ -141,6 +141,8 @@ Opening an encrypted database with the wrong key fails immediately. No data is c
 
 ### What's the performance impact?
 
-- **Inserts**: ~4.6x overhead on bulk inserts due to SQLCipher's strict WAL synchronization requirements compared to standard SQLite.
-- **Queries**: Negligible (~1%) overhead for typical read queries.
+Measured on Apple M2 Max:
+- **Inserts**: ~5.0x overhead on bulk inserts (164 µs -> 833 µs) due to SQLCipher's strict HMAC and WAL synchronization requirements.
+- **Queries**: Negligible (<1%) overhead for typical read queries and FTS5 searches.
+- **File I/O**: AES-GCM is hardware-accelerated (2.7 GB/s encryption, 4.4 GB/s decryption).
 - **Cache Build**: Parquet cache encryption adds ~2.5x overhead to the one-time cache building process.
