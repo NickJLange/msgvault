@@ -237,6 +237,30 @@ func (s *Store) GetActiveSync(sourceID int64) (*SyncRun, error) {
 	return run, err
 }
 
+// GetLatestCheckpointedSync returns the most recent sync run for a source if
+// (and only if) that latest run is running or failed and has a non-empty
+// cursor_before. A completed run after a failed one means the failed run's
+// checkpoint is stale: re-importing must re-scan all threads, so we return
+// no row in that case.
+func (s *Store) GetLatestCheckpointedSync(sourceID int64) (*SyncRun, error) {
+	row := s.db.QueryRow(`
+		SELECT id, source_id, started_at, completed_at, status,
+		       messages_processed, messages_added, messages_updated, errors_count,
+		       error_message, cursor_before, cursor_after
+		FROM sync_runs
+		WHERE source_id = ?
+		  AND id = (SELECT MAX(id) FROM sync_runs WHERE source_id = ?)
+		  AND status IN ('running', 'failed')
+		  AND cursor_before IS NOT NULL AND cursor_before != ''
+	`, sourceID, sourceID)
+
+	run, err := scanSyncRun(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return run, err
+}
+
 // HasAnyActiveSync returns true if any source currently has a running sync.
 // Use this as a safety gate before performing destructive file operations that
 // could race with concurrent attachment ingestion.
